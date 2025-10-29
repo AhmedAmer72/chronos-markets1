@@ -1,0 +1,5 @@
+{
+  "name": "Chronos Markets",
+  "description": "Chronos Markets is a high-frequency prediction market framework, designed to solve latency and congestion by embracing extreme parallelism. This web application provides a real-time, data-centric, and intuitive user experience for trading on prediction markets.",
+  "requestFramePermissions": []
+}
