@@ -192,43 +192,6 @@ Build the application:
 
 npm run build
 
-Copy
-
-Insert at cursor
-bash
-Deploy to your preferred hosting platform
-
-Ensure Linera service is accessible
-
-Configure environment variables for production
-
-🤝 Contributing
-Fork the repository
-
-Create a feature branch
-
-Make your changes
-
-Submit a pull request
-
-📄 License
-This project is licensed under the MIT License.
-
-🔗 Links
-Linera Documentation
-
-Live Demo
-
-API Documentation
-
-📞 Support
-For support and questions:
-
-Create an issue on GitHub
-
-Join our Discord community
-
-Follow us on Twitter
 
 Built with ❤️ using Linera Protocol
 ```
