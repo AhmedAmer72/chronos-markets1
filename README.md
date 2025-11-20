@@ -101,10 +101,6 @@ cd linera-app
 cargo build --release --target wasm32-unknown-unknown
 ```
 
-## 📚 Documentation
-
-- [Integration Guide](./INTEGRATION_GUIDE.md) - Detailed integration documentation
-- [Testing Guide](./TESTING_GUIDE.md) - How to test the platform
 
 ## 🎯 Core Operations
 
@@ -134,18 +130,6 @@ Markets are created with:
 - **Blockchain**: Linera Protocol
 - **Smart Contracts**: Rust, WebAssembly
 - **API**: GraphQL
-
-## 📄 License
-
-MIT License - see LICENSE file for details
-
-## 🤝 Contributing
-
-Contributions welcome! Please read our contributing guidelines first.
-
-## 📞 Support
-
-For issues and questions, please open a GitHub issue.
 
 ---
 
