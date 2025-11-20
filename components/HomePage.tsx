@@ -4,6 +4,7 @@ import { getMarkets } from '../services/mockApi';
 import { Market } from '../types';
 import { LineChart, Line, ResponsiveContainer, YAxis, Tooltip } from 'recharts';
 import { TrendingUpIcon, UsersIcon, ZapIcon, ArrowRightIcon } from './icons';
+import IntegrationTest from './IntegrationTest';
 
 const SparklineChart: React.FC<{ data: { time: number; value: number }[] }> = ({ data }) => {
     const chartColor = data[data.length - 1].value >= data[0].value ? '#238636' : '#DA3633';
@@ -214,6 +215,9 @@ const HomePage: React.FC = () => {
                     </div>
                 </div>
             </section>
+
+            {/* Integration Test Component - Remove this in production */}
+            <IntegrationTest />
         </div>
     );
 };

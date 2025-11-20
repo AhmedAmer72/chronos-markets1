@@ -1,7 +1,15 @@
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import chronosContract from '../services/chronosContract';
+import { useWallet } from '../contexts/WalletContext';
 
 const CreateMarketPage: React.FC = () => {
+    const navigate = useNavigate();
+    const { wallet } = useWallet();
+    
     const [step, setStep] = useState(1);
+    const [isSubmitting, setIsSubmitting] = useState(false);
+    const [error, setError] = useState<string | null>(null);
     const [marketData, setMarketData] = useState({
         question: '',
         endDate: '',
@@ -15,6 +23,69 @@ const CreateMarketPage: React.FC = () => {
     const handlePrev = () => setStep(s => Math.max(s - 1, 1));
     const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
         setMarketData({ ...marketData, [e.target.name]: e.target.value });
+    };
+
+    const handleSubmit = async () => {
+        // Validate data
+        if (!marketData.question.trim()) {
+            setError('Please enter a question');
+            return;
+        }
+        if (!marketData.endDate || !marketData.endTime) {
+            setError('Please set an end date and time');
+            return;
+        }
+        if (!marketData.liquidity || parseFloat(marketData.liquidity) <= 0) {
+            setError('Please provide initial liquidity');
+            return;
+        }
+
+        // Check wallet connection
+        if (!wallet.isConnected) {
+            setError('Please connect your wallet first');
+            return;
+        }
+
+        setIsSubmitting(true);
+        setError(null);
+
+        try {
+            // Convert date/time to Unix timestamp
+            const endDateTime = new Date(`${marketData.endDate}T${marketData.endTime}`);
+            const endTimeUnix = Math.floor(endDateTime.getTime() / 1000);
+
+            console.log('Creating market:', {
+                question: marketData.question,
+                description: marketData.details,
+                endTime: endTimeUnix,
+                initialLiquidity: marketData.liquidity
+            });
+
+            // Call smart contract
+            const result = await chronosContract.createMarket({
+                question: marketData.question,
+                description: marketData.details || `Oracle: ${marketData.oracle}`,
+                endTime: endTimeUnix,
+                initialLiquidity: marketData.liquidity
+            });
+
+            if (result.success) {
+                console.log('✅ Market created successfully! ID:', result.marketId);
+                
+                // Show success message
+                alert(`🎉 Market created successfully!\n\nMarket ID: ${result.marketId}\n\nRedirecting to markets page...`);
+                
+                // Navigate to markets page
+                navigate('/markets');
+            } else {
+                throw new Error(result.error || 'Failed to create market');
+            }
+        } catch (err) {
+            console.error('❌ Failed to create market:', err);
+            setError(err instanceof Error ? err.message : 'Failed to create market. Please try again.');
+        } finally {
+            setIsSubmitting(false);
+        }
     };
 
     const renderStep = () => {
@@ -99,12 +170,44 @@ const CreateMarketPage: React.FC = () => {
 
             <div className="bg-brand-surface border border-brand-border rounded-lg p-8 min-h-[300px]">
                 {renderStep()}
+                
+                {/* Error message */}
+                {error && (
+                    <div className="mt-4 p-3 bg-red-900/20 border border-red-700 rounded-lg text-red-400 text-sm">
+                        ⚠️ {error}
+                    </div>
+                )}
+                
+                {/* Wallet warning */}
+                {step === 4 && !wallet.isConnected && (
+                    <div className="mt-4 p-3 bg-yellow-900/20 border border-yellow-700 rounded-lg text-yellow-400 text-sm">
+                        ⚠️ Please connect your wallet to create a market
+                    </div>
+                )}
             </div>
             
             <div className="flex justify-between mt-8">
                 <button onClick={handlePrev} disabled={step === 1} className="px-6 py-2 rounded-lg bg-brand-surface-2 border border-brand-border disabled:opacity-50 hover:bg-brand-border text-brand-text">Back</button>
                 {step < 4 && <button onClick={handleNext} className="px-6 py-2 rounded-lg bg-brand-primary text-white hover:bg-brand-primary-hover font-semibold">Next</button>}
-                {step === 4 && <button className="px-6 py-2 rounded-lg bg-brand-success text-white hover:bg-green-700 font-semibold">Submit & Deploy</button>}
+                {step === 4 && (
+                    <button 
+                        onClick={handleSubmit}
+                        disabled={isSubmitting || !wallet.isConnected}
+                        className="px-6 py-2 rounded-lg bg-brand-success text-white hover:bg-green-700 font-semibold disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                    >
+                        {isSubmitting ? (
+                            <>
+                                <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                </svg>
+                                Creating...
+                            </>
+                        ) : (
+                            'Submit & Deploy'
+                        )}
+                    </button>
+                )}
             </div>
         </div>
     );

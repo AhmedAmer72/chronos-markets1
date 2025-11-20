@@ -1,0 +1,20 @@
+[package]
+name = "chronos-market-service"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+chronos-market = { path = ".." }
+async-graphql.workspace = true
+linera-sdk.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[[bin]]
+name = "chronos_market_service"
+path = "src/lib.rs"

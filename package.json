@@ -6,7 +6,11 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "linera:start": "bash start-linera.sh",
+    "linera:setup-wallet": "bash setup-wallet.sh",
+    "linera:service": "linera service --port 8080",
+    "linera:status": "linera wallet show && linera query-balance"
   },
   "dependencies": {
     "react": "^19.2.0",
