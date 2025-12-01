@@ -8,11 +8,6 @@ export default defineConfig(({ mode }) => {
       server: {
         port: 5173,
         host: '0.0.0.0',
-        // Required headers for SharedArrayBuffer (needed by @linera/client)
-        headers: {
-          'Cross-Origin-Opener-Policy': 'same-origin',
-          'Cross-Origin-Embedder-Policy': 'require-corp',
-        },
       },
       plugins: [react()],
       define: {
