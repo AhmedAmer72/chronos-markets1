@@ -2,6 +2,30 @@
 
 A decentralized prediction market platform built on the Linera blockchain protocol, enabling users to trade on real-world events with speed and transparency.
 
+## 🏆 Linera Buildathon Submission
+
+### Quick Start (For Judges)
+
+```bash
+# Run with Docker Compose
+docker compose up --force-recreate
+```
+
+Then access the application at **http://localhost:5173**
+
+This will:
+1. Start a local Linera network with faucet
+2. Build and deploy the smart contracts
+3. Launch the React frontend
+
+### Port Structure
+- `5173`: Frontend (React + Vite)
+- `8080`: Linera Faucet
+- `9001`: Linera shard proxy
+- `13001`: Linera shard
+
+---
+
 ## 🚀 Features
 
 - **AMM-Based Pricing**: Automated Market Maker using constant product formula (k = x * y)

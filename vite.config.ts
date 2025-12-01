@@ -6,7 +6,7 @@ export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, '.', '');
     return {
       server: {
-        port: 3007,
+        port: 5173,
         host: '0.0.0.0',
         // Required headers for SharedArrayBuffer (needed by @linera/client)
         headers: {

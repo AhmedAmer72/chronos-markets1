@@ -1,0 +1,12 @@
+services:
+  app:
+    build: .
+    ports:
+      - "5173:5173"   # Web app (Vite frontend)
+      - "8080:8080"   # Linera faucet
+      - "9001:9001"   # Linera shard proxy
+      - "13001:13001" # Linera shard
+    volumes:
+      - .:/build
+    environment:
+      - VITE_LINERA_NODE_URL=http://localhost:8080
