@@ -23,7 +23,7 @@ export const IntegrationTest: React.FC = () => {
   const checkConnection = async () => {
     setStatus({ devnetConnected: false, loading: true, error: null });
     
-    const connected = await chronosContract.checkDevnetConnection();
+    const connected = await chronosContract.checkConnection();
     
     if (connected) {
       setStatus({ devnetConnected: true, loading: false, error: null });

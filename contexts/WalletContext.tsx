@@ -1,9 +1,9 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
-import lineraClient from '../services/lineraClient';
+import chronosContract from '../services/chronosContract';
 
 // Application configuration
-const DEFAULT_APPLICATION_ID = import.meta.env.VITE_LINERA_APP_ID || '';
-const USE_TESTNET = import.meta.env.VITE_USE_TESTNET !== 'false';
+const DEFAULT_APPLICATION_ID = import.meta.env.VITE_LINERA_APP_ID || chronosContract.APPLICATION_ID;
+const DEFAULT_CHAIN_ID = import.meta.env.VITE_LINERA_CHAIN_ID || chronosContract.CHAIN_ID;
 
 export interface WalletState {
   isConnected: boolean;
@@ -41,15 +41,17 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [wallet, setWallet] = useState<WalletState>(initialWalletState);
   const [isLoading, setIsLoading] = useState(false);
 
-  // Check if Linera client library is available
+  // Check if Linera service is available on mount
   useEffect(() => {
-    const checkAvailability = async () => {
-      const available = await lineraClient.isLineraAvailable();
-      if (!available) {
-        console.log('ℹ️ Linera client not available, mock mode enabled');
+    const checkConnection = async () => {
+      const connected = await chronosContract.checkConnection();
+      if (connected) {
+        console.log('✅ Linera service is available');
+      } else {
+        console.log('ℹ️ Linera service not available, will use mock mode');
       }
     };
-    checkAvailability();
+    checkConnection();
   }, []);
 
   const connect = useCallback(async () => {
@@ -57,95 +59,56 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setWallet(prev => ({ ...prev, isInitializing: true, error: null }));
 
     try {
-      // Check if Linera is available
-      const isAvailable = await lineraClient.isLineraAvailable();
+      // Check if Linera service is running
+      const isConnected = await chronosContract.checkConnection();
       
-      if (isAvailable) {
-        // Initialize Linera client
-        console.log('🔗 Connecting to Linera', USE_TESTNET ? 'Testnet' : 'Devnet');
+      if (isConnected) {
+        console.log('🔗 Connecting to Linera Testnet...');
         
-        const initResult = await lineraClient.initializeLinera(USE_TESTNET);
-        
-        if (!initResult.success) {
-          throw new Error(initResult.error || 'Failed to initialize Linera');
-        }
-        
-        // Connect to the Chronos Markets application if we have an ID
-        if (DEFAULT_APPLICATION_ID) {
-          const appResult = await lineraClient.connectToApplication(DEFAULT_APPLICATION_ID);
-          if (!appResult.success) {
-            console.warn('⚠️ Could not connect to application:', appResult.error);
-          }
-        }
-        
-        // Subscribe to chain notifications
-        lineraClient.subscribeToNotifications((notification) => {
-          console.log('📬 Chain notification:', notification);
-        });
+        // Get total volume to verify connection
+        const volumeResult = await chronosContract.getTotalVolume();
         
         setWallet({
           isConnected: true,
           isInitializing: false,
-          address: initResult.chainId?.slice(0, 10) + '...' + initResult.chainId?.slice(-6) || null,
+          address: DEFAULT_CHAIN_ID.slice(0, 10) + '...' + DEFAULT_CHAIN_ID.slice(-6),
           balance: '100',
-          chainId: initResult.chainId || null,
-          applicationId: DEFAULT_APPLICATION_ID || null,
-          network: USE_TESTNET ? 'testnet' : 'devnet',
+          chainId: DEFAULT_CHAIN_ID,
+          applicationId: DEFAULT_APPLICATION_ID,
+          network: 'testnet',
           error: null,
         });
         
         console.log('✅ Wallet connected successfully');
+        console.log('📊 Total volume:', volumeResult.volume);
         
       } else {
-        // Fallback: Try to connect via GraphQL to local devnet
-        console.log('🔗 Falling back to direct GraphQL connection');
+        // Use mock mode for development
+        console.log('⚠️ Using mock wallet mode');
         
-        const nodeUrl = import.meta.env.VITE_LINERA_NODE_URL || 'http://localhost:8080';
-        
-        const response = await fetch(nodeUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query: '{ chains { list } }' }),
+        setWallet({
+          isConnected: true,
+          isInitializing: false,
+          address: '0x' + Math.random().toString(16).slice(2, 12) + '...',
+          balance: '100',
+          chainId: 'mock-' + Date.now(),
+          applicationId: DEFAULT_APPLICATION_ID,
+          network: 'devnet',
+          error: null,
         });
-        
-        if (response.ok) {
-          const result = await response.json();
-          const chains = result.data?.chains?.list;
-          
-          if (chains && chains.length > 0) {
-            const chainId = chains[0];
-            
-            setWallet({
-              isConnected: true,
-              isInitializing: false,
-              address: chainId.slice(0, 10) + '...' + chainId.slice(-6),
-              balance: '100',
-              chainId,
-              applicationId: DEFAULT_APPLICATION_ID || null,
-              network: 'devnet',
-              error: null,
-            });
-            
-            console.log('✅ Connected to local devnet via GraphQL');
-          } else {
-            throw new Error('No chains found on devnet');
-          }
-        } else {
-          throw new Error('Failed to connect to Linera node');
-        }
       }
       
     } catch (error) {
       console.error('❌ Wallet connection failed:', error);
       
-      // Set error state but also provide mock wallet for development
+      // Still allow mock mode for development
       setWallet({
         isConnected: true,
         isInitializing: false,
         address: '0x' + Math.random().toString(16).slice(2, 12) + '...',
         balance: '100',
         chainId: 'mock-chain-' + Date.now(),
-        applicationId: DEFAULT_APPLICATION_ID || null,
+        applicationId: DEFAULT_APPLICATION_ID,
         network: 'disconnected',
         error: error instanceof Error ? error.message : 'Connection failed',
       });
@@ -164,15 +127,16 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const refreshBalance = useCallback(async () => {
     if (!wallet.isConnected) return;
     
-    console.log('🔄 Refreshing balance...');
+    console.log('🔄 Refreshing data...');
     
     try {
-      const result = await lineraClient.queryApplication('query { totalVolume }');
-      if (result.success) {
-        console.log('💰 Current volume:', result.data);
-      }
+      const volumeResult = await chronosContract.getTotalVolume();
+      console.log('📊 Total volume:', volumeResult.volume);
+      
+      const marketCount = await chronosContract.getMarketCount();
+      console.log('📈 Market count:', marketCount);
     } catch (error) {
-      console.error('Failed to refresh balance:', error);
+      console.error('Failed to refresh data:', error);
     }
   }, [wallet.isConnected]);
 
