@@ -6,8 +6,13 @@ export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, '.', '');
     return {
       server: {
-        port: 3001,
+        port: 3007,
         host: '0.0.0.0',
+        // Required headers for SharedArrayBuffer (needed by @linera/client)
+        headers: {
+          'Cross-Origin-Opener-Policy': 'same-origin',
+          'Cross-Origin-Embedder-Policy': 'require-corp',
+        },
       },
       plugins: [react()],
       define: {
@@ -18,6 +23,17 @@ export default defineConfig(({ mode }) => {
         alias: {
           '@': path.resolve(__dirname, '.'),
         }
-      }
+      },
+      // Optimize deps for Linera client
+      optimizeDeps: {
+        exclude: ['@linera/client'],
+      },
+      build: {
+        rollupOptions: {
+          input: {
+            main: path.resolve(__dirname, 'index.html'),
+          },
+        },
+      },
     };
 });

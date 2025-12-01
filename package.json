@@ -13,6 +13,7 @@
     "linera:status": "linera wallet show && linera query-balance"
   },
   "dependencies": {
+    "@linera/client": "^0.15.6",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-router-dom": "^7.9.4",
