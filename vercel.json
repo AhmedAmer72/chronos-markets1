@@ -17,7 +17,7 @@
         },
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://faucet.testnet-conway.linera.net https://*.linera.net wss://*.linera.net wss: https:; worker-src 'self' blob:; child-src 'self' blob:; frame-ancestors 'self';"
+          "value": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; style-src-elem 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' https://faucet.testnet-conway.linera.net https://*.linera.net wss://*.linera.net wss: https:; worker-src 'self' blob:; child-src 'self' blob:; frame-ancestors 'self';"
         }
       ]
     }
