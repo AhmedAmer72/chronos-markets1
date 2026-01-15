@@ -4,11 +4,10 @@
  * This is the single point of contact with @linera/client.
  * All other code should use this adapter instead of importing @linera/client directly.
  * 
- * Based on Linera-Arcade pattern: https://github.com/mohamedwael201193/Linera-Arcade
+ * Based on: https://github.com/NeoCrafts-cpu/Linera-Mine
  */
 
 import { ensureWasmInitialized } from './wasmInit';
-import { AutoSigner, type Signer } from './signers';
 
 // Use 'any' for dynamic module types to avoid TypeScript issues with private constructors
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -43,12 +42,16 @@ async function getLineraClient(): Promise<LineraClientModule> {
 
 // Environment configuration
 const DEFAULT_FAUCET_URL = import.meta.env.VITE_LINERA_FAUCET_URL || 'https://faucet.testnet-conway.linera.net';
-const APPLICATION_ID = import.meta.env.VITE_LINERA_APP_ID || '';
-const DEFAULT_CHAIN_ID = import.meta.env.VITE_LINERA_CHAIN_ID || '';
+const APPLICATION_ID = import.meta.env.VITE_APPLICATION_ID || import.meta.env.VITE_LINERA_APP_ID || '';
+
+// Log configuration at module load for debugging
+console.log('🔧 Linera Adapter Config:');
+console.log(`   Faucet URL: ${DEFAULT_FAUCET_URL}`);
+console.log(`   Application ID: ${APPLICATION_ID ? APPLICATION_ID.slice(0, 16) + '...' : '(not set)'}`);
 
 // Validate APPLICATION_ID at module load (warning only, don't block)
 if (!APPLICATION_ID || APPLICATION_ID === '' || APPLICATION_ID === 'placeholder') {
-  console.warn('⚠️ VITE_LINERA_APP_ID is not set. Blockchain features may be limited.');
+  console.warn('⚠️ APPLICATION_ID is not set. Blockchain features will be limited.');
 }
 
 /**
@@ -60,7 +63,8 @@ export interface LineraConnection {
   faucet: Faucet;
   chainId: string;
   address: string;
-  signer: Signer;
+  /** Auto-signer address for automatic signing without popups */
+  autoSignerAddress?: string;
 }
 
 /**
@@ -88,9 +92,6 @@ class LineraAdapterClass {
   private appConnection: ApplicationConnection | null = null;
   private connectPromise: Promise<LineraConnection> | null = null;
   
-  // Store the client sync promise for lazy awaiting
-  private clientSyncPromise: Promise<Client> | null = null;
-  
   // Listeners for state changes
   private listeners: Set<StateChangeListener> = new Set();
 
@@ -115,19 +116,21 @@ class LineraAdapterClass {
    * 1. Initialize WASM (if not already done)
    * 2. Connect to Conway faucet
    * 3. Create a Linera wallet
-   * 4. Claim a microchain for the user
-   * 5. Create a Client with auto-signer
+   * 4. Claim a microchain for the user address
+   * 5. Create a Client
    * 
-   * @param userAddress - Optional user address (not used, kept for API compatibility)
+   * @param userAddress - The user's address (can be any unique identifier)
    * @param faucetUrl - Optional faucet URL override
    * @returns LineraConnection with client, wallet, chainId, etc.
    */
   async connect(
-    userAddress?: string,
+    userAddress: string,
     faucetUrl: string = DEFAULT_FAUCET_URL
   ): Promise<LineraConnection> {
-    // If already connected, return existing connection
-    if (this.connection) {
+    const normalizedAddress = userAddress.toLowerCase();
+
+    // If already connected with same address, return existing connection
+    if (this.connection && this.connection.address === normalizedAddress) {
       console.log('✅ Already connected to Linera');
       return this.connection;
     }
@@ -139,7 +142,7 @@ class LineraAdapterClass {
     }
 
     // Start new connection
-    this.connectPromise = this.performConnect(faucetUrl);
+    this.connectPromise = this.performConnect(faucetUrl, normalizedAddress);
     
     try {
       const connection = await this.connectPromise;
@@ -153,7 +156,8 @@ class LineraAdapterClass {
    * Internal connection implementation
    */
   private async performConnect(
-    faucetUrl: string = DEFAULT_FAUCET_URL
+    faucetUrl: string,
+    userAddress: string
   ): Promise<LineraConnection> {
     try {
       console.log('🔄 Connecting to Linera...');
@@ -173,51 +177,31 @@ class LineraAdapterClass {
       console.log('👛 Creating Linera wallet...');
       const wallet = await faucet.createWallet();
       
-      // Step 5: Create auto-signer for automatic signing
-      console.log('🔑 Creating auto-signer...');
-      const privateKey = signerModule.PrivateKey.createRandom();
-      const address = privateKey.address();
-      console.log(`   Signer address: ${address}`);
+      // Step 5: Create auto-signer FIRST (for automatic signing without popups)
+      // This is the key pattern from Linera-Mine
+      console.log('🔑 Setting up auto-signing...');
+      const autoSigner = signerModule.PrivateKey.createRandom();
+      const autoSignerAddress = autoSigner.address();
+      console.log(`   Auto-signer address: ${autoSignerAddress}`);
       
-      // Step 6: Claim a microchain for the address
-      console.log(`⛓️ Claiming microchain for ${address}...`);
-      const chainId = await faucet.claimChain(wallet, address);
+      // Step 6: Claim a microchain for the AUTO-SIGNER address (not user address!)
+      // This makes the autoSigner the initial owner, so it can sign immediately
+      console.log(`⛓️ Claiming microchain for auto-signer...`);
+      const chainId = await faucet.claimChain(wallet, autoSignerAddress);
       console.log(`✅ Claimed chain: ${chainId}`);
       
-      // Step 7: Create Linera client with signer and WAIT for sync
-      // This is the approach used by Linera-Arcade - they await the client fully
-      console.log('🔗 Creating Linera client and syncing with validators...');
-      console.log('   ⏳ This may take 1-3 minutes on first connection...');
+      // Step 7: Create Linera client with auto-signer
+      console.log('🔗 Creating Linera client with auto-signing...');
+      const client = await new Client(wallet, autoSigner);
       
-      const clientThenable = new Client(wallet, privateKey);
-      
-      // Store the thenable as a promise for later use
-      this.clientSyncPromise = Promise.resolve(clientThenable);
-      
-      // Try to await with a very long timeout (3 minutes)
-      // If this fails, we'll fall back to mock mode
-      const timeoutMs = 180000; // 3 minutes
-      const timeoutPromise = new Promise<Client>((_, reject) => {
-        setTimeout(() => {
-          reject(new Error(`SYNC_TIMEOUT: Client sync did not complete in ${timeoutMs/1000}s`));
-        }, timeoutMs);
-      });
-      
-      let client: Client;
+      // Step 8: Set auto-signer as default owner in wallet
+      console.log('⛓️ Configuring wallet...');
       try {
-        client = await Promise.race([clientThenable, timeoutPromise]);
-        console.log('✅ Linera client synced successfully!');
-      } catch (syncError) {
-        // Sync failed - store partial connection and let app decide what to do
-        console.warn('⚠️ Client sync incomplete:', syncError);
-        console.log('📝 Storing partial connection - some features may be limited');
-        
-        // Store the unresolved thenable - operations will need to await it
-        client = clientThenable;
+        await wallet.setOwner(chainId, autoSignerAddress);
+        console.log('✅ Wallet configured for auto-signing!');
+      } catch (setOwnerError) {
+        console.warn('⚠️ Could not set default owner:', setOwnerError);
       }
-      
-      // Create our signer wrapper
-      const signer = new AutoSigner();
       
       // Store connection
       this.connection = {
@@ -225,13 +209,14 @@ class LineraAdapterClass {
         wallet,
         faucet,
         chainId,
-        address,
-        signer,
+        address: userAddress,
+        autoSignerAddress,
       };
       
-      console.log('✅ Connected to Linera successfully!');
+      console.log('✅ Connected to Linera successfully with auto-signing!');
       console.log(`   Chain ID: ${chainId}`);
-      console.log(`   Address: ${address}`);
+      console.log(`   User Address: ${userAddress}`);
+      console.log(`   Auto-Signer (chain owner): ${autoSignerAddress}`);
       
       this.notifyListeners();
       return this.connection;
@@ -247,6 +232,10 @@ class LineraAdapterClass {
   /**
    * Connect to the Chronos Markets application
    * 
+   * Uses the user's claimed chain to connect to the application.
+   * In Linera's multi-chain architecture, each user operates on their own chain,
+   * and the application runs on each chain (accessed via the Application ID).
+   * 
    * @param applicationId - Optional override for application ID
    * @returns ApplicationConnection with application instance
    */
@@ -258,7 +247,7 @@ class LineraAdapterClass {
     }
 
     if (!applicationId) {
-      throw new Error('Application ID is not configured');
+      throw new Error('Application ID is not configured. Set VITE_APPLICATION_ID or VITE_LINERA_APP_ID in your .env');
     }
 
     // If already connected to same application, return existing
@@ -268,38 +257,13 @@ class LineraAdapterClass {
     }
 
     try {
-      console.log(`🎮 Connecting to application: ${applicationId.slice(0, 16)}...`);
+      console.log(`🎯 Connecting to application: ${applicationId.slice(0, 16)}...`);
+      console.log(`⛓️ Using user's chain: ${this.connection.chainId.slice(0, 16)}...`);
       
-      // Ensure client is resolved (await in case it's still a thenable)
-      let resolvedClient = this.connection.client;
-      
-      // Check if client has .chain method - if not, it's still a thenable
-      if (typeof resolvedClient.chain !== 'function') {
-        console.log('⏳ Client still syncing, waiting for completion...');
-        
-        // Try to await with timeout
-        const timeoutPromise = new Promise<never>((_, reject) => {
-          setTimeout(() => reject(new Error('Client sync timeout during app connection')), 120000);
-        });
-        
-        try {
-          resolvedClient = await Promise.race([resolvedClient, timeoutPromise]);
-          this.connection.client = resolvedClient;
-          console.log('✅ Client sync completed!');
-        } catch (syncErr) {
-          throw new Error('Client must be fully synced to connect to application. Please try again later.');
-        }
-      }
-      
-      // Get chain instance
-      console.log('⛓️ Getting chain instance...');
-      const chain = await resolvedClient.chain(this.connection.chainId);
-      console.log('✅ Got chain instance!');
-      
-      // Get application
-      console.log('📱 Getting application instance...');
+      // Use the USER'S claimed chain, not a hardcoded hub chain
+      // This is the Linera multi-chain pattern: each user has their own chain
+      const chain = await this.connection.client.chain(this.connection.chainId);
       const application = await chain.application(applicationId);
-      console.log('✅ Got application instance!');
       
       // Set up notifications on the chain for real-time updates
       this.setupChainNotifications(chain);
@@ -327,11 +291,13 @@ class LineraAdapterClass {
    * 
    * @param graphqlQuery - GraphQL query string
    * @param variables - Optional variables for the query
-   * @returns Parsed JSON response
+   * @param timeoutMs - Timeout in milliseconds (default: 60s for mutations, they may take longer)
+   * @returns Parsed JSON response data
    */
   async query<T = unknown>(
     graphqlQuery: string,
-    variables?: Record<string, unknown>
+    variables?: Record<string, unknown>,
+    timeoutMs: number = 60000
   ): Promise<T> {
     if (!this.appConnection) {
       throw new Error('Must connect to application before querying');
@@ -343,9 +309,19 @@ class LineraAdapterClass {
 
     try {
       console.log('📤 Sending query:', JSON.stringify(payload, null, 2));
-      const result = await this.appConnection.application.query(
+      
+      // Add timeout to prevent infinite waiting during network sync
+      const queryPromise = this.appConnection.application.query(
         JSON.stringify(payload)
       );
+      
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => {
+          reject(new Error(`Query timed out after ${timeoutMs / 1000}s. The network may still be syncing the application. Please try again in a few moments.`));
+        }, timeoutMs);
+      });
+      
+      const result = await Promise.race([queryPromise, timeoutPromise]);
       
       console.log('📥 Raw result:', result);
       const parsed = JSON.parse(result);
@@ -368,19 +344,59 @@ class LineraAdapterClass {
 
   /**
    * Execute a GraphQL mutation against the application
-   * This triggers a blockchain transaction that requires wallet signing.
+   * This triggers a blockchain transaction.
+   * 
+   * Mutations require the user's chain to be synced across validators first.
+   * This method includes retry logic to handle temporary sync issues.
    * 
    * @param graphqlMutation - GraphQL mutation string
    * @param variables - Optional variables for the mutation
+   * @param timeoutMs - Timeout per attempt in milliseconds (default: 45s)
+   * @param maxRetries - Maximum number of retry attempts (default: 4)
    * @returns Parsed JSON response
    */
   async mutate<T = unknown>(
     graphqlMutation: string,
-    variables?: Record<string, unknown>
+    variables?: Record<string, unknown>,
+    timeoutMs: number = 45000,
+    maxRetries: number = 4
   ): Promise<T> {
-    // Mutations use the same interface as queries in Linera
-    // The client handles distinguishing based on GraphQL operation type
-    return this.query<T>(graphqlMutation, variables);
+    let lastError: Error | null = null;
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        console.log(`🔄 Mutation attempt ${attempt}/${maxRetries}...`);
+        
+        // Use query method which handles the actual GraphQL execution
+        const result = await this.query<T>(graphqlMutation, variables, timeoutMs);
+        
+        console.log(`✅ Mutation succeeded on attempt ${attempt}`);
+        return result;
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        console.warn(`⚠️ Mutation attempt ${attempt} failed:`, lastError.message);
+        
+        // If it's a timeout and we have retries left, wait and retry
+        if (lastError.message.includes('timed out') && attempt < maxRetries) {
+          const waitTime = attempt * 5000; // Exponential backoff: 5s, 10s, 15s
+          console.log(`⏳ Waiting ${waitTime / 1000}s before retry (chain may be syncing)...`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+          continue;
+        }
+        
+        // For other errors, don't retry
+        if (!lastError.message.includes('timed out')) {
+          break;
+        }
+      }
+    }
+    
+    // All retries exhausted or non-retryable error
+    throw new Error(
+      lastError?.message.includes('timed out')
+        ? `Transaction failed after ${maxRetries} attempts. Your chain may still be syncing across the network. Please wait 2-3 minutes and try again.`
+        : lastError?.message || 'Mutation failed'
+    );
   }
 
   /**
@@ -388,8 +404,9 @@ class LineraAdapterClass {
    */
   private setupChainNotifications(chain: Chain): void {
     try {
-      chain.onNotification((notification: { reason?: { NewBlock?: unknown } }) => {
-        if (notification.reason?.NewBlock) {
+      chain.onNotification((notification: unknown) => {
+        const notif = notification as { reason?: { NewBlock?: unknown } };
+        if (notif.reason?.NewBlock) {
           console.log('📦 New block received, notifying listeners...');
           this.notifyListeners();
         }
@@ -428,10 +445,18 @@ class LineraAdapterClass {
   }
 
   /**
-   * Get connected wallet address
+   * Get connected wallet address (the original user address)
    */
   getAddress(): string | null {
     return this.connection?.address ?? null;
+  }
+
+  /**
+   * Get the auto-signer address (the chain owner used for blockchain transactions)
+   * This is the address that appears as "client" or "agent" in blockchain records
+   */
+  getAutoSignerAddress(): string | null {
+    return this.connection?.autoSignerAddress ?? null;
   }
 
   /**
@@ -442,10 +467,10 @@ class LineraAdapterClass {
   }
 
   /**
-   * Get signer address
+   * Get the application ID
    */
-  getSignerAddress(): string | null {
-    return this.connection?.address ?? null;
+  getApplicationId(): string {
+    return APPLICATION_ID;
   }
 
   /**
@@ -456,8 +481,46 @@ class LineraAdapterClass {
     this.connection = null;
     this.appConnection = null;
     this.connectPromise = null;
-    this.clientSyncPromise = null;
     this.notifyListeners();
+  }
+
+  /**
+   * Clear cached wallet data from IndexedDB
+   * This forces a fresh wallet creation on next connect
+   */
+  async clearCache(): Promise<void> {
+    console.log('🧹 Clearing Linera wallet cache...');
+    
+    // Disconnect first
+    this.disconnect();
+    
+    // Clear IndexedDB databases used by @linera/client
+    if (typeof indexedDB !== 'undefined') {
+      const databases = await indexedDB.databases?.() || [];
+      for (const db of databases) {
+        if (db.name && (db.name.includes('linera') || db.name.includes('wallet'))) {
+          console.log(`   Deleting database: ${db.name}`);
+          indexedDB.deleteDatabase(db.name);
+        }
+      }
+    }
+    
+    // Clear localStorage keys related to Linera
+    if (typeof localStorage !== 'undefined') {
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && (key.includes('linera') || key.includes('wallet'))) {
+          keysToRemove.push(key);
+        }
+      }
+      keysToRemove.forEach(key => {
+        console.log(`   Removing localStorage key: ${key}`);
+        localStorage.removeItem(key);
+      });
+    }
+    
+    console.log('✅ Cache cleared. Refresh page to reconnect with fresh wallet.');
   }
 
   /**
@@ -492,3 +555,5 @@ export const lineraAdapter = LineraAdapterClass.getInstance();
 
 // Also export the class for testing
 export { LineraAdapterClass };
+
+export default lineraAdapter;

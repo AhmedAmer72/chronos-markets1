@@ -3,7 +3,7 @@
  * 
  * Manages Linera connection state using direct faucet connection.
  * Creates a new wallet via faucet and claims a chain for the user.
- * Based on Linera-Arcade pattern.
+ * Based on: https://github.com/NeoCrafts-cpu/Linera-Mine
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -11,7 +11,21 @@ import { lineraAdapter, type LineraConnection } from '../lib/linera';
 
 // Environment configuration
 const FAUCET_URL = import.meta.env.VITE_LINERA_FAUCET_URL || 'https://faucet.testnet-conway.linera.net';
-const APPLICATION_ID = import.meta.env.VITE_LINERA_APP_ID;
+const APPLICATION_ID = import.meta.env.VITE_APPLICATION_ID || import.meta.env.VITE_LINERA_APP_ID;
+
+/**
+ * Generate a unique user address identifier
+ */
+function generateUserAddress(): string {
+  // Use crypto.randomUUID if available, otherwise generate from random bytes
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return `user-${crypto.randomUUID()}`;
+  }
+  // Fallback: generate a pseudo-random hex string
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return `user-${Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('')}`;
+}
 
 /**
  * Connection state returned by the hook
@@ -71,7 +85,7 @@ export function useLineraConnection(): LineraConnectionState {
   const connect = useCallback(async (userAddress?: string) => {
     // Validate prerequisites
     if (!APPLICATION_ID) {
-      setError('Application ID is not configured. Check VITE_LINERA_APP_ID.');
+      setError('Application ID is not configured. Check VITE_APPLICATION_ID or VITE_LINERA_APP_ID.');
       return;
     }
     
@@ -89,8 +103,11 @@ export function useLineraConnection(): LineraConnectionState {
     try {
       console.log('🔗 Connecting to Linera via faucet...');
       
+      // Generate user address if not provided
+      const address = userAddress || generateUserAddress();
+      
       // Step 1: Connect to Linera network via faucet (creates wallet + claims chain)
-      await lineraAdapter.connect(userAddress, FAUCET_URL);
+      await lineraAdapter.connect(address, FAUCET_URL);
       
       // Step 2: Connect to Chronos Markets application
       await lineraAdapter.connectApplication(APPLICATION_ID);

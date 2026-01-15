@@ -1,15 +1,11 @@
 /**
  * Linera Module - Re-exports for clean imports
+ * 
+ * Based on: https://github.com/NeoCrafts-cpu/Linera-Mine
  */
 
 // WASM initialization
 export { ensureWasmInitialized, isWasmReady, resetWasmInit } from './wasmInit';
-
-// Signers
-export { 
-  AutoSigner, 
-  type Signer 
-} from './signers';
 
 // Linera adapter singleton
 export { 

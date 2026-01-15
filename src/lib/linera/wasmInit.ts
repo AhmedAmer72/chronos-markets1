@@ -4,7 +4,7 @@
  * Ensures @linera/client WASM is initialized exactly once.
  * All other code should use ensureWasmInitialized() instead of calling initLinera() directly.
  * 
- * Based on Linera-Arcade pattern: https://github.com/mohamedwael201193/Linera-Arcade
+ * Based on: https://github.com/NeoCrafts-cpu/Linera-Mine
  */
 
 // Module-level state for singleton pattern
@@ -49,28 +49,27 @@ export async function ensureWasmInitialized(): Promise<void> {
     try {
       console.log('🔄 Initializing Linera WASM modules...');
       const linera = await getLineraModule();
-      
-      // Initialize the WASM module
-      if (linera.default) {
-        await linera.default();
-      } else if (linera.initialize) {
-        await linera.initialize();
-      }
-      
+      await linera.initialize();
       initialized = true;
       console.log('✅ Linera WASM modules initialized successfully');
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       
       // Handle "already initialized" error gracefully
-      if (message.includes('already initialized') || message.includes('Already initialized')) {
-        console.log('ℹ️ Linera WASM was already initialized');
+      // This can happen in HMR or if another part of the app called initLinera
+      if (
+        message.includes('storage is already initialized') || 
+        message.includes('already been initialized')
+      ) {
+        console.warn('⚠️ Linera WASM was already initialized; continuing...');
         initialized = true;
         return;
       }
       
-      console.error('❌ Failed to initialize Linera WASM:', message);
+      // Reset state on actual failure so retry is possible
       initPromise = null;
+      initialized = false;
+      console.error('❌ Failed to initialize Linera WASM:', error);
       throw error;
     }
   })();
