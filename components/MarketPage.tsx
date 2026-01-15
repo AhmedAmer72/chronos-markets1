@@ -59,42 +59,190 @@ const MarketChart: React.FC<{ data: { time: number, value: number }[] }> = ({ da
 };
 
 const TradeWidget: React.FC = () => {
+    const [tradeMode, setTradeMode] = useState<'market' | 'limit'>('market');
     const [orderType, setOrderType] = useState<OrderType>(OrderType.BUY);
     const [shareType, setShareType] = useState<ShareType>(ShareType.YES);
     const [amount, setAmount] = useState('');
     const [price, setPrice] = useState('0.62');
+    const [expiryType, setExpiryType] = useState<'gtc' | 'gtt' | 'ioc'>('gtc'); // Good Till Cancelled, Good Till Time, Immediate Or Cancel
+    const [expiryTime, setExpiryTime] = useState('');
+    const [openOrders, setOpenOrders] = useState<{ id: number; type: 'buy' | 'sell'; share: 'yes' | 'no'; price: string; amount: string; filled: string; expiry: string }[]>([
+        { id: 1, type: 'buy', share: 'yes', price: '0.58', amount: '100', filled: '35', expiry: 'GTC' },
+        { id: 2, type: 'sell', share: 'no', price: '0.42', amount: '50', filled: '0', expiry: '2h 15m' },
+    ]);
+    const [showOrders, setShowOrders] = useState(false);
 
     const cost = (parseFloat(amount) || 0) * (parseFloat(price) || 0);
     const payout = (parseFloat(amount) || 0) * 1;
     const isYes = shareType === ShareType.YES;
 
+    const handlePlaceOrder = () => {
+        if (!amount || !price) return;
+        if (tradeMode === 'limit') {
+            const newOrder = {
+                id: Date.now(),
+                type: orderType === OrderType.BUY ? 'buy' : 'sell' as 'buy' | 'sell',
+                share: isYes ? 'yes' : 'no' as 'yes' | 'no',
+                price,
+                amount,
+                filled: '0',
+                expiry: expiryType === 'gtc' ? 'GTC' : expiryType === 'ioc' ? 'IOC' : expiryTime || '24h'
+            };
+            setOpenOrders([newOrder, ...openOrders]);
+            setAmount('');
+        }
+        // For market orders, would submit immediately
+    };
+
+    const cancelOrder = (id: number) => {
+        setOpenOrders(openOrders.filter(o => o.id !== id));
+    };
+
     return (
         <div className="bg-brand-surface border border-brand-border rounded-lg p-4">
+            {/* Mode Toggle */}
+            <div className="flex gap-2 mb-4">
+                <button 
+                    onClick={() => setTradeMode('market')}
+                    className={`flex-1 py-2 text-sm font-semibold rounded-md transition-colors ${tradeMode === 'market' ? 'bg-brand-primary text-white' : 'bg-brand-surface-2 text-brand-secondary hover:text-brand-text'}`}
+                >
+                    Market
+                </button>
+                <button 
+                    onClick={() => setTradeMode('limit')}
+                    className={`flex-1 py-2 text-sm font-semibold rounded-md transition-colors ${tradeMode === 'limit' ? 'bg-brand-primary text-white' : 'bg-brand-surface-2 text-brand-secondary hover:text-brand-text'}`}
+                >
+                    Limit
+                </button>
+            </div>
+
+            {/* Buy/Sell Toggle */}
             <div className="grid grid-cols-2 gap-2 mb-4 bg-brand-surface-2 p-1 rounded-lg">
                 <button onClick={() => setOrderType(OrderType.BUY)} className={`py-2 rounded-md font-semibold transition-colors ${orderType === OrderType.BUY ? 'bg-brand-success text-white' : 'text-brand-secondary hover:text-brand-text'}`}>Buy</button>
                 <button onClick={() => setOrderType(OrderType.SELL)} className={`py-2 rounded-md font-semibold transition-colors ${orderType === OrderType.SELL ? 'bg-brand-danger text-white' : 'text-brand-secondary hover:text-brand-text'}`}>Sell</button>
             </div>
+
+            {/* Yes/No Toggle */}
             <div className="grid grid-cols-2 gap-2 mb-4">
                 <button onClick={() => setShareType(ShareType.YES)} className={`py-2 rounded-md font-semibold border-2 transition-all ${isYes ? 'border-brand-yes text-brand-yes bg-brand-yes-bg' : 'border-transparent text-brand-secondary bg-brand-surface-2 hover:bg-brand-border'}`}>YES</button>
                 <button onClick={() => setShareType(ShareType.NO)} className={`py-2 rounded-md font-semibold border-2 transition-all ${!isYes ? 'border-brand-no text-brand-no bg-brand-no-bg' : 'border-transparent text-brand-secondary bg-brand-surface-2 hover:bg-brand-border'}`}>NO</button>
             </div>
+
             <div className="space-y-4">
                 <div>
                     <label className="text-xs text-brand-secondary block mb-1">Amount (Shares)</label>
                     <input type="number" value={amount} onChange={e => setAmount(e.target.value)} className="w-full bg-brand-surface-2 p-2 rounded-md border border-brand-border focus:outline-none focus:border-brand-primary focus:ring-1 focus:ring-brand-primary" placeholder="0" />
                 </div>
-                <div>
-                    <label className="text-xs text-brand-secondary block mb-1">Price (Cents per share)</label>
-                    <input type="number" value={price} onChange={e => setPrice(e.target.value)} className="w-full bg-brand-surface-2 p-2 rounded-md border border-brand-border focus:outline-none focus:border-brand-primary focus:ring-1 focus:ring-brand-primary" placeholder="0.00" step="0.01" />
-                </div>
+                
+                {tradeMode === 'limit' && (
+                    <>
+                        <div>
+                            <label className="text-xs text-brand-secondary block mb-1">Limit Price (per share)</label>
+                            <input type="number" value={price} onChange={e => setPrice(e.target.value)} className="w-full bg-brand-surface-2 p-2 rounded-md border border-brand-border focus:outline-none focus:border-brand-primary focus:ring-1 focus:ring-brand-primary" placeholder="0.00" step="0.01" />
+                        </div>
+                        
+                        <div>
+                            <label className="text-xs text-brand-secondary block mb-1">Order Duration</label>
+                            <div className="grid grid-cols-3 gap-2">
+                                <button onClick={() => setExpiryType('gtc')} className={`py-1.5 text-xs rounded-md transition-colors ${expiryType === 'gtc' ? 'bg-brand-primary text-white' : 'bg-brand-surface-2 text-brand-secondary'}`}>
+                                    GTC
+                                </button>
+                                <button onClick={() => setExpiryType('gtt')} className={`py-1.5 text-xs rounded-md transition-colors ${expiryType === 'gtt' ? 'bg-brand-primary text-white' : 'bg-brand-surface-2 text-brand-secondary'}`}>
+                                    GTT
+                                </button>
+                                <button onClick={() => setExpiryType('ioc')} className={`py-1.5 text-xs rounded-md transition-colors ${expiryType === 'ioc' ? 'bg-brand-primary text-white' : 'bg-brand-surface-2 text-brand-secondary'}`}>
+                                    IOC
+                                </button>
+                            </div>
+                            <p className="text-[10px] text-brand-secondary mt-1">
+                                {expiryType === 'gtc' && 'Good Till Cancelled - Order stays open until filled or cancelled'}
+                                {expiryType === 'gtt' && 'Good Till Time - Order expires at specified time'}
+                                {expiryType === 'ioc' && 'Immediate Or Cancel - Fill immediately or cancel'}
+                            </p>
+                        </div>
+                        
+                        {expiryType === 'gtt' && (
+                            <div>
+                                <label className="text-xs text-brand-secondary block mb-1">Expires In</label>
+                                <select value={expiryTime} onChange={e => setExpiryTime(e.target.value)} className="w-full bg-brand-surface-2 p-2 rounded-md border border-brand-border text-brand-text">
+                                    <option value="1h">1 Hour</option>
+                                    <option value="4h">4 Hours</option>
+                                    <option value="24h">24 Hours</option>
+                                    <option value="7d">7 Days</option>
+                                    <option value="30d">30 Days</option>
+                                </select>
+                            </div>
+                        )}
+                    </>
+                )}
+                
+                {tradeMode === 'market' && (
+                    <div>
+                        <label className="text-xs text-brand-secondary block mb-1">Est. Price (per share)</label>
+                        <input type="number" value={price} onChange={e => setPrice(e.target.value)} className="w-full bg-brand-surface-2 p-2 rounded-md border border-brand-border focus:outline-none focus:border-brand-primary focus:ring-1 focus:ring-brand-primary" placeholder="0.00" step="0.01" disabled />
+                        <p className="text-[10px] text-brand-secondary mt-1">Price determined by order book</p>
+                    </div>
+                )}
             </div>
+
             <div className="mt-4 text-xs space-y-2 text-brand-secondary">
                 <div className="flex justify-between"><span>Cost:</span> <span className="font-mono text-brand-text">${cost.toFixed(2)}</span></div>
                 <div className="flex justify-between"><span>Potential Payout:</span> <span className="font-mono text-brand-text">${payout.toFixed(2)}</span></div>
             </div>
-            <button className={`w-full mt-4 py-3 rounded-md font-bold text-white transition-colors text-lg ${orderType === OrderType.BUY ? 'bg-brand-success hover:bg-green-700' : 'bg-brand-danger hover:bg-red-700'}`}>
-                Place Order
+
+            <button 
+                onClick={handlePlaceOrder}
+                className={`w-full mt-4 py-3 rounded-md font-bold text-white transition-colors text-lg ${orderType === OrderType.BUY ? 'bg-brand-success hover:bg-green-700' : 'bg-brand-danger hover:bg-red-700'}`}
+            >
+                {tradeMode === 'market' ? 'Place Market Order' : 'Place Limit Order'}
             </button>
+
+            {/* Open Orders Section */}
+            <div className="mt-4 pt-4 border-t border-brand-border">
+                <button 
+                    onClick={() => setShowOrders(!showOrders)}
+                    className="flex items-center justify-between w-full text-sm text-brand-secondary hover:text-brand-text"
+                >
+                    <span>Open Orders ({openOrders.length})</span>
+                    <span>{showOrders ? '▲' : '▼'}</span>
+                </button>
+                
+                {showOrders && (
+                    <div className="mt-3 space-y-2 max-h-48 overflow-y-auto">
+                        {openOrders.length === 0 ? (
+                            <p className="text-xs text-brand-secondary text-center py-2">No open orders</p>
+                        ) : (
+                            openOrders.map(order => (
+                                <div key={order.id} className="bg-brand-surface-2 rounded-lg p-2 text-xs">
+                                    <div className="flex justify-between items-center">
+                                        <div className="flex items-center gap-2">
+                                            <span className={order.type === 'buy' ? 'text-brand-yes' : 'text-brand-no'}>
+                                                {order.type.toUpperCase()}
+                                            </span>
+                                            <span className={order.share === 'yes' ? 'text-brand-yes' : 'text-brand-no'}>
+                                                {order.share.toUpperCase()}
+                                            </span>
+                                        </div>
+                                        <button onClick={() => cancelOrder(order.id)} className="text-brand-no hover:underline">
+                                            Cancel
+                                        </button>
+                                    </div>
+                                    <div className="flex justify-between mt-1 text-brand-secondary">
+                                        <span>{order.filled}/{order.amount} @ ${order.price}</span>
+                                        <span>{order.expiry}</span>
+                                    </div>
+                                    <div className="mt-1 h-1 bg-brand-border rounded-full overflow-hidden">
+                                        <div 
+                                            className="h-full bg-brand-primary"
+                                            style={{ width: `${(parseFloat(order.filled) / parseFloat(order.amount)) * 100}%` }}
+                                        />
+                                    </div>
+                                </div>
+                            ))
+                        )}
+                    </div>
+                )}
+            </div>
         </div>
     );
 };

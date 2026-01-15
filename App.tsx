@@ -10,6 +10,8 @@ import MarketPage from './components/MarketPage';
 import PortfolioPage from './components/PortfolioPage';
 import CreateMarketPage from './components/CreateMarketPage';
 import AgentHubPage from './components/AgentHubPage';
+import SocialFeedPage from './components/SocialFeedPage';
+import CombosPage from './components/CombosPage';
 
 const AnimatedBackground: React.FC = () => (
     <div className="fixed top-0 left-0 w-full h-full -z-10 overflow-hidden bg-brand-bg">
@@ -45,6 +47,8 @@ const App: React.FC = () => {
                             <Route path="/portfolio" element={<PortfolioPage />} />
                             <Route path="/create" element={<CreateMarketPage />} />
                             <Route path="/agent-hub" element={<AgentHubPage />} />
+                            <Route path="/social" element={<SocialFeedPage />} />
+                            <Route path="/combos" element={<CombosPage />} />
                         </Routes>
                     </main>
                     <Footer />

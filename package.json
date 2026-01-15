@@ -1,7 +1,7 @@
 {
   "name": "chronos-markets",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,18 +10,23 @@
     "linera:start": "bash start-linera.sh",
     "linera:setup-wallet": "bash setup-wallet.sh",
     "linera:service": "linera service --port 8080",
-    "linera:status": "linera wallet show && linera query-balance"
+    "linera:status": "linera wallet show && linera query-balance",
+    "linera:deploy": "bash deploy-testnet.sh"
   },
   "dependencies": {
-    "@linera/client": "^0.15.6",
+    "@linera/client": "^0.15.8",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-router-dom": "^7.9.4",
-    "recharts": "^3.3.0"
+    "recharts": "^3.3.0",
+    "framer-motion": "^11.15.0",
+    "lucide-react": "^0.468.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.1.17",
     "@types/node": "^22.14.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^5.0.0",
     "autoprefixer": "^10.4.22",
     "postcss": "^8.5.6",

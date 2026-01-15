@@ -1,0 +1,469 @@
+/**
+ * Linera Adapter - Singleton managing all Linera blockchain interactions
+ * 
+ * This is the single point of contact with @linera/client.
+ * All other code should use this adapter instead of importing @linera/client directly.
+ * 
+ * Based on Linera-Arcade pattern: https://github.com/mohamedwael201193/Linera-Arcade
+ */
+
+import { ensureWasmInitialized } from './wasmInit';
+import { AutoSigner, createMetaMaskSigner, type Signer } from './signers';
+
+// Use 'any' for dynamic module types to avoid TypeScript issues with private constructors
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type LineraClientModule = any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Faucet = any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Client = any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Wallet = any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Application = any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Chain = any;
+
+// Cached module reference
+let lineraClientModule: LineraClientModule | null = null;
+
+/**
+ * Dynamically load the @linera/client module
+ */
+async function getLineraClient(): Promise<LineraClientModule> {
+  if (lineraClientModule) return lineraClientModule;
+  try {
+    lineraClientModule = await import('@linera/client');
+    return lineraClientModule;
+  } catch (error) {
+    console.error('❌ Failed to load @linera/client:', error);
+    throw error;
+  }
+}
+
+// Environment configuration
+const DEFAULT_FAUCET_URL = import.meta.env.VITE_LINERA_FAUCET_URL || 'https://faucet.testnet-conway.linera.net';
+const APPLICATION_ID = import.meta.env.VITE_LINERA_APP_ID || '';
+const DEFAULT_CHAIN_ID = import.meta.env.VITE_LINERA_CHAIN_ID || '';
+
+// Validate APPLICATION_ID at module load (warning only, don't block)
+if (!APPLICATION_ID || APPLICATION_ID === '' || APPLICATION_ID === 'placeholder') {
+  console.warn('⚠️ VITE_LINERA_APP_ID is not set. Blockchain features may be limited.');
+}
+
+/**
+ * Connection state after wallet connect
+ */
+export interface LineraConnection {
+  client: Client;
+  wallet: Wallet;
+  faucet: Faucet;
+  chainId: string;
+  address: string;
+  signer: Signer;
+  /** Auto-signer address for session-based automatic signing */
+  autoSignerAddress: string;
+}
+
+/**
+ * Application connection state
+ */
+export interface ApplicationConnection {
+  application: Application;
+  applicationId: string;
+  chain: Chain;
+}
+
+/**
+ * Listener callback type for state changes
+ */
+type StateChangeListener = () => void;
+
+/**
+ * LineraAdapter - Singleton class managing Linera connections
+ */
+class LineraAdapterClass {
+  private static instance: LineraAdapterClass | null = null;
+  
+  // Connection state
+  private connection: LineraConnection | null = null;
+  private appConnection: ApplicationConnection | null = null;
+  private connectPromise: Promise<LineraConnection> | null = null;
+  
+  // Listeners for state changes
+  private listeners: Set<StateChangeListener> = new Set();
+
+  private constructor() {
+    // Private constructor for singleton
+  }
+
+  /**
+   * Get the singleton instance
+   */
+  static getInstance(): LineraAdapterClass {
+    if (!LineraAdapterClass.instance) {
+      LineraAdapterClass.instance = new LineraAdapterClass();
+    }
+    return LineraAdapterClass.instance;
+  }
+
+  /**
+   * Connect to Linera network
+   * 
+   * This will:
+   * 1. Initialize WASM (if not already done)
+   * 2. Connect to Conway faucet
+   * 3. Create a Linera wallet
+   * 4. Claim a microchain for the user's address
+   * 5. Create a Client with signer
+   * 
+   * @param userAddress - Optional user's EVM address (from MetaMask)
+   * @param faucetUrl - Optional faucet URL override
+   * @returns LineraConnection with client, wallet, chainId, etc.
+   */
+  async connect(
+    userAddress?: string,
+    faucetUrl: string = DEFAULT_FAUCET_URL
+  ): Promise<LineraConnection> {
+    // If already connected, return existing connection
+    if (this.connection) {
+      console.log('✅ Already connected to Linera');
+      return this.connection;
+    }
+
+    // If connection in progress, wait for it
+    if (this.connectPromise) {
+      console.log('⏳ Connection in progress, waiting...');
+      return this.connectPromise;
+    }
+
+    // Start new connection
+    this.connectPromise = this.performConnect(userAddress, faucetUrl);
+    
+    try {
+      const connection = await this.connectPromise;
+      return connection;
+    } finally {
+      this.connectPromise = null;
+    }
+  }
+
+  /**
+   * Internal connection implementation
+   */
+  private async performConnect(
+    userAddress?: string,
+    faucetUrl: string = DEFAULT_FAUCET_URL
+  ): Promise<LineraConnection> {
+    try {
+      console.log('🔄 Connecting to Linera...');
+      
+      // Step 1: Initialize WASM
+      await ensureWasmInitialized();
+      
+      // Step 2: Dynamically load @linera/client
+      const lineraModule = await getLineraClient();
+      const { Faucet, Client } = lineraModule;
+      
+      // Step 3: Create faucet connection
+      console.log(`📡 Connecting to faucet: ${faucetUrl}`);
+      const faucet = new Faucet(faucetUrl);
+      
+      // Step 4: Create Linera wallet from faucet (gets genesis config)
+      console.log('👛 Creating Linera wallet...');
+      const wallet = await faucet.createWallet();
+      
+      // Step 5: Create signers
+      // Try MetaMask first, fall back to auto-signer
+      let signer: Signer;
+      let address: string;
+      
+      if (userAddress) {
+        address = userAddress.toLowerCase();
+        const metaMaskSigner = await createMetaMaskSigner();
+        if (metaMaskSigner) {
+          signer = metaMaskSigner;
+          console.log('🦊 Using MetaMask signer');
+        } else {
+          signer = new AutoSigner();
+          console.log('🔑 MetaMask not available, using auto-signer');
+        }
+      } else {
+        const autoSigner = new AutoSigner();
+        signer = autoSigner;
+        address = autoSigner.getAddress();
+        console.log('🔑 Using auto-signer');
+      }
+      
+      // Step 6: Claim a microchain for the address
+      console.log(`⛓️ Claiming microchain for ${address}...`);
+      const chainId = await faucet.claimChain(wallet, address);
+      console.log(`✅ Claimed chain: ${chainId}`);
+      
+      // Step 7: Create Linera client with signer
+      console.log('🔗 Creating Linera client...');
+      const client = await new Client(wallet, signer);
+      
+      // Step 8: Connect to chain and set up auto-signer as owner
+      console.log('⛓️ Connecting to chain...');
+      const chain = await client.chain(chainId);
+      
+      // Create auto-signer for automatic operations
+      const autoSigner = new AutoSigner();
+      const autoSignerAddress = autoSigner.getAddress();
+      
+      // Try to add auto-signer as owner (may fail if not supported)
+      try {
+        await chain.addOwner(autoSignerAddress);
+        await wallet.setOwner(chainId, autoSignerAddress);
+        console.log('✅ Auto-signing enabled!');
+      } catch (error) {
+        console.log('ℹ️ Auto-signing not enabled:', error);
+      }
+      
+      // Store connection
+      this.connection = {
+        client,
+        wallet,
+        faucet,
+        chainId,
+        address,
+        signer,
+        autoSignerAddress,
+      };
+      
+      console.log('✅ Connected to Linera successfully!');
+      console.log(`   Chain ID: ${chainId}`);
+      console.log(`   Address: ${address}`);
+      
+      this.notifyListeners();
+      return this.connection;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error('❌ Failed to connect to Linera:', message);
+      this.connection = null;
+      this.notifyListeners();
+      throw error;
+    }
+  }
+
+  /**
+   * Connect to the Chronos Markets application
+   * 
+   * @param applicationId - Optional override for application ID
+   * @returns ApplicationConnection with application instance
+   */
+  async connectApplication(
+    applicationId: string = APPLICATION_ID
+  ): Promise<ApplicationConnection> {
+    if (!this.connection) {
+      throw new Error('Must connect wallet before connecting to application');
+    }
+
+    if (!applicationId) {
+      throw new Error('Application ID is not configured');
+    }
+
+    // If already connected to same application, return existing
+    if (this.appConnection && this.appConnection.applicationId === applicationId) {
+      console.log('✅ Already connected to application');
+      return this.appConnection;
+    }
+
+    try {
+      console.log(`🎮 Connecting to application: ${applicationId.slice(0, 16)}...`);
+      
+      // Get chain instance first, then get application
+      const chain = await this.connection.client.chain(this.connection.chainId);
+      const application = await chain.application(applicationId);
+      
+      // Set up notifications on the chain for real-time updates
+      this.setupChainNotifications(chain);
+      
+      this.appConnection = {
+        application,
+        applicationId,
+        chain,
+      };
+      
+      console.log('✅ Connected to Chronos Markets application!');
+      this.notifyListeners();
+      return this.appConnection;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error('❌ Failed to connect to application:', message);
+      this.appConnection = null;
+      this.notifyListeners();
+      throw error;
+    }
+  }
+
+  /**
+   * Execute a GraphQL query against the application
+   * 
+   * @param graphqlQuery - GraphQL query string
+   * @param variables - Optional variables for the query
+   * @returns Parsed JSON response
+   */
+  async query<T = unknown>(
+    graphqlQuery: string,
+    variables?: Record<string, unknown>
+  ): Promise<T> {
+    if (!this.appConnection) {
+      throw new Error('Must connect to application before querying');
+    }
+
+    const payload = variables
+      ? { query: graphqlQuery, variables }
+      : { query: graphqlQuery };
+
+    try {
+      console.log('📤 Sending query:', JSON.stringify(payload, null, 2));
+      const result = await this.appConnection.application.query(
+        JSON.stringify(payload)
+      );
+      
+      console.log('📥 Raw result:', result);
+      const parsed = JSON.parse(result);
+      console.log('📥 Parsed result:', JSON.stringify(parsed, null, 2));
+      
+      // Check for GraphQL errors
+      if (parsed.errors && parsed.errors.length > 0) {
+        const firstError = parsed.errors[0];
+        console.error('❌ GraphQL errors:', parsed.errors);
+        throw new Error(firstError.message || 'GraphQL error');
+      }
+      
+      return parsed.data as T;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error('❌ Query failed:', message);
+      throw error;
+    }
+  }
+
+  /**
+   * Execute a GraphQL mutation against the application
+   * This triggers a blockchain transaction that requires wallet signing.
+   * 
+   * @param graphqlMutation - GraphQL mutation string
+   * @param variables - Optional variables for the mutation
+   * @returns Parsed JSON response
+   */
+  async mutate<T = unknown>(
+    graphqlMutation: string,
+    variables?: Record<string, unknown>
+  ): Promise<T> {
+    // Mutations use the same interface as queries in Linera
+    // The client handles distinguishing based on GraphQL operation type
+    return this.query<T>(graphqlMutation, variables);
+  }
+
+  /**
+   * Set up notification listener on a chain for real-time updates
+   */
+  private setupChainNotifications(chain: Chain): void {
+    try {
+      chain.onNotification((notification: { reason?: { NewBlock?: unknown } }) => {
+        if (notification.reason?.NewBlock) {
+          console.log('📦 New block received, notifying listeners...');
+          this.notifyListeners();
+        }
+      });
+    } catch (error) {
+      console.warn('⚠️ Could not set up notifications:', error);
+    }
+  }
+
+  /**
+   * Check if wallet is connected
+   */
+  isConnected(): boolean {
+    return this.connection !== null;
+  }
+
+  /**
+   * Check if application is connected
+   */
+  isApplicationConnected(): boolean {
+    return this.appConnection !== null;
+  }
+
+  /**
+   * Get current connection (may be null)
+   */
+  getConnection(): LineraConnection | null {
+    return this.connection;
+  }
+
+  /**
+   * Get current application connection (may be null)
+   */
+  getApplicationConnection(): ApplicationConnection | null {
+    return this.appConnection;
+  }
+
+  /**
+   * Get connected wallet address
+   */
+  getAddress(): string | null {
+    return this.connection?.address ?? null;
+  }
+
+  /**
+   * Get claimed chain ID
+   */
+  getChainId(): string | null {
+    return this.connection?.chainId ?? null;
+  }
+
+  /**
+   * Get auto-signer address
+   */
+  getAutoSignerAddress(): string | null {
+    return this.connection?.autoSignerAddress ?? null;
+  }
+
+  /**
+   * Disconnect and clear all state
+   */
+  disconnect(): void {
+    console.log('🔌 Disconnecting from Linera...');
+    this.connection = null;
+    this.appConnection = null;
+    this.connectPromise = null;
+    this.notifyListeners();
+  }
+
+  /**
+   * Subscribe to state changes
+   * 
+   * @param listener - Callback to invoke on state changes
+   * @returns Unsubscribe function
+   */
+  subscribe(listener: StateChangeListener): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  /**
+   * Notify all listeners of state change
+   */
+  private notifyListeners(): void {
+    this.listeners.forEach((listener) => {
+      try {
+        listener();
+      } catch (error) {
+        console.error('Listener error:', error);
+      }
+    });
+  }
+}
+
+// Export singleton instance
+export const lineraAdapter = LineraAdapterClass.getInstance();
+
+// Also export the class for testing
+export { LineraAdapterClass };
