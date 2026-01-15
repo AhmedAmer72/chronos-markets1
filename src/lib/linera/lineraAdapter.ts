@@ -254,8 +254,21 @@ class LineraAdapterClass {
     try {
       console.log(`🎮 Connecting to application: ${applicationId.slice(0, 16)}...`);
       
+      // The client is a thenable - we need to await it to get the resolved Client
+      // before we can call .chain() on it
+      console.log('⏳ Waiting for client sync to complete...');
+      
+      // Await the client thenable with a timeout
+      const clientPromise = Promise.resolve(this.connection.client);
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Client sync timeout (60s)')), 60000);
+      });
+      
+      const resolvedClient = await Promise.race([clientPromise, timeoutPromise]);
+      console.log('✅ Client sync completed!');
+      
       // Get chain instance first, then get application
-      const chain = await this.connection.client.chain(this.connection.chainId);
+      const chain = await resolvedClient.chain(this.connection.chainId);
       const application = await chain.application(applicationId);
       
       // Set up notifications on the chain for real-time updates
