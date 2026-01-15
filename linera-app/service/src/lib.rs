@@ -3,14 +3,16 @@
 
 #![cfg_attr(target_arch = "wasm32", no_main)]
 
-use async_graphql::{EmptySubscription, Object, Request, Response, Schema, SimpleObject, Enum};
+use std::sync::Arc;
+use async_graphql::{EmptySubscription, Object, Request, Response, Schema, SimpleObject};
 use linera_sdk::{
     linera_base_types::{AccountOwner, Amount, Timestamp, WithServiceAbi},
     views::{linera_views, MapView, RegisterView, RootView, View, ViewStorageContext},
+    graphql::GraphQLMutationRoot as _,
     Service, ServiceRuntime,
 };
 use serde::{Deserialize, Serialize};
-use chronos_market::{AgentStrategy, OrderSide, OrderDuration, FeedItemType};
+use chronos_market::{AgentStrategy, OrderSide, OrderDuration, FeedItemType, Operation};
 
 linera_sdk::service!(MarketService);
 
@@ -192,8 +194,8 @@ impl From<Market> for MarketInfo {
             creator: format!("{:?}", m.creator),
             question: m.question,
             categories: m.categories,
-            end_time: format!("{}", u64::from(m.end_time)),
-            created_at: format!("{}", u64::from(m.created_at)),
+            end_time: format!("{}", m.end_time.micros()),
+            created_at: format!("{}", m.created_at.micros()),
             yes_pool: format!("{}", m.yes_pool),
             no_pool: format!("{}", m.no_pool),
             total_yes_shares: format!("{}", m.total_yes_shares),
@@ -254,7 +256,7 @@ impl From<LimitOrder> for LimitOrderInfo {
             original_amount: format!("{}", o.original_amount),
             filled_amount: format!("{}", o.filled_amount),
             status: format!("{:?}", o.status),
-            created_at: format!("{}", u64::from(o.created_at)),
+            created_at: format!("{}", o.created_at.micros()),
         }
     }
 }
@@ -296,7 +298,7 @@ impl From<Combo> for ComboInfo {
             stake: format!("{}", c.stake),
             potential_payout: format!("{}", c.potential_payout),
             status: format!("{:?}", c.status),
-            created_at: format!("{}", u64::from(c.created_at)),
+            created_at: format!("{}", c.created_at.micros()),
         }
     }
 }
@@ -335,7 +337,7 @@ impl From<TradingAgent> for AgentInfo {
             winning_trades: a.winning_trades,
             followers_count: a.followers_count,
             is_active: a.is_active,
-            created_at: format!("{}", u64::from(a.created_at)),
+            created_at: format!("{}", a.created_at.micros()),
         }
     }
 }
@@ -364,7 +366,7 @@ impl From<FeedItem> for FeedItemInfo {
             data: f.data,
             likes_count: f.likes_count,
             comments_count: f.comments_count,
-            created_at: format!("{}", u64::from(f.created_at)),
+            created_at: format!("{}", f.created_at.micros()),
         }
     }
 }
@@ -372,7 +374,8 @@ impl From<FeedItem> for FeedItemInfo {
 // ============ SERVICE ============
 
 pub struct MarketService {
-    state: MarketState,
+    state: Arc<MarketState>,
+    runtime: Arc<ServiceRuntime<Self>>,
 }
 
 impl WithServiceAbi for MarketService {
@@ -386,7 +389,10 @@ impl Service for MarketService {
         let state = MarketState::load(runtime.root_view_storage_context())
             .await
             .expect("Failed to load state");
-        MarketService { state }
+        MarketService { 
+            state: Arc::new(state),
+            runtime: Arc::new(runtime),
+        }
     }
 
     async fn handle_query(&self, request: Request) -> Response {
@@ -449,7 +455,7 @@ impl Service for MarketService {
                 agents,
                 feed_items,
             },
-            MutationRoot,
+            Operation::mutation_root(self.runtime.clone()),
             EmptySubscription,
         )
         .finish();
@@ -573,15 +579,5 @@ impl QueryRoot {
 
     async fn feed_by_type(&self, item_type: String) -> Vec<&FeedItemInfo> {
         self.feed_items.iter().filter(|f| f.item_type == item_type).collect()
-    }
-}
-
-struct MutationRoot;
-
-#[Object]
-impl MutationRoot {
-    /// Placeholder - actual mutations are handled via Linera operations
-    async fn placeholder(&self) -> bool {
-        true
     }
 }

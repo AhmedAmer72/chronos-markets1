@@ -1,8 +1,11 @@
 // Copyright (c) Chronos Markets
 // ABI of the Chronos Markets Prediction Market Application
 
-use async_graphql::{Request, Response};
-use linera_sdk::linera_base_types::{Amount, AccountOwner, Timestamp, ContractAbi, ServiceAbi};
+use async_graphql::{Request, Response, InputObject, Enum};
+use linera_sdk::{
+    linera_base_types::{Amount, AccountOwner, Timestamp, ContractAbi, ServiceAbi},
+    graphql::GraphQLMutationRoot,
+};
 use serde::{Deserialize, Serialize};
 
 pub struct MarketAbi;
@@ -18,33 +21,32 @@ impl ServiceAbi for MarketAbi {
 }
 
 /// Order types for limit orders
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Enum)]
 pub enum OrderSide {
     Buy,
     Sell,
 }
 
-/// Order duration types
-#[derive(Debug, Clone, Deserialize, Serialize)]
+/// Order duration types - simplified for GraphQL compatibility
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Enum)]
 pub enum OrderDuration {
     GoodTillCancelled,
-    GoodTillTime(Timestamp),
     ImmediateOrCancel,
 }
 
 /// Agent trading strategies
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Enum)]
 pub enum AgentStrategy {
     Momentum,
     MeanReversion,
     Arbitrage,
     MarketMaker,
     Sentiment,
-    Custom(String),
+    Custom,
 }
 
 /// Social feed item types
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Enum)]
 pub enum FeedItemType {
     Trade,
     MarketCreated,
@@ -54,7 +56,7 @@ pub enum FeedItemType {
 }
 
 /// Operations that can be performed on the market
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, GraphQLMutationRoot)]
 pub enum Operation {
     // === Market Operations ===
     CreateMarket {
@@ -146,7 +148,7 @@ pub enum Operation {
 }
 
 /// Combo leg definition
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, InputObject)]
 pub struct ComboLeg {
     pub market_id: u64,
     pub prediction: bool,  // true = YES, false = NO

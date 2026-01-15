@@ -7,7 +7,7 @@ pub mod state;
 
 use chronos_market::{MarketAbi, Operation, OperationResponse, OrderSide, OrderDuration, FeedItemType};
 use linera_sdk::{
-    linera_base_types::{Amount, WithContractAbi},
+    linera_base_types::{Amount, WithContractAbi, AccountOwner},
     views::{RootView, View},
     Contract, ContractRuntime,
 };
