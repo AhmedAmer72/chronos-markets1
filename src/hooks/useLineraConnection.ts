@@ -1,7 +1,8 @@
 /**
  * useLineraConnection Hook
  * 
- * Manages Linera connection state.
+ * Manages Linera connection state using direct faucet connection.
+ * Creates a new wallet via faucet and claims a chain for the user.
  * Based on Linera-Arcade pattern.
  */
 
@@ -48,6 +49,7 @@ export function useLineraConnection(): LineraConnectionState {
   
   // Track if connection is in progress
   const isConnectingRef = useRef(false);
+  const autoConnectAttempted = useRef(false);
   
   /**
    * Sync state from adapter (stable reference)
@@ -85,9 +87,9 @@ export function useLineraConnection(): LineraConnectionState {
     setError(null);
     
     try {
-      console.log('🔗 Connecting to Linera...');
+      console.log('🔗 Connecting to Linera via faucet...');
       
-      // Step 1: Connect wallet to Linera network
+      // Step 1: Connect to Linera network via faucet (creates wallet + claims chain)
       await lineraAdapter.connect(userAddress, FAUCET_URL);
       
       // Step 2: Connect to Chronos Markets application
@@ -113,6 +115,7 @@ export function useLineraConnection(): LineraConnectionState {
     lineraAdapter.disconnect();
     setError(null);
     syncState();
+    autoConnectAttempted.current = false;
   }, [syncState]);
   
   /**

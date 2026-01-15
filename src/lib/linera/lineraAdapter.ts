@@ -8,7 +8,7 @@
  */
 
 import { ensureWasmInitialized } from './wasmInit';
-import { AutoSigner, createMetaMaskSigner, type Signer } from './signers';
+import { AutoSigner, type Signer } from './signers';
 
 // Use 'any' for dynamic module types to avoid TypeScript issues with private constructors
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -61,8 +61,6 @@ export interface LineraConnection {
   chainId: string;
   address: string;
   signer: Signer;
-  /** Auto-signer address for session-based automatic signing */
-  autoSignerAddress: string;
 }
 
 /**
@@ -114,10 +112,10 @@ class LineraAdapterClass {
    * 1. Initialize WASM (if not already done)
    * 2. Connect to Conway faucet
    * 3. Create a Linera wallet
-   * 4. Claim a microchain for the user's address
-   * 5. Create a Client with signer
+   * 4. Claim a microchain for the user
+   * 5. Create a Client with auto-signer
    * 
-   * @param userAddress - Optional user's EVM address (from MetaMask)
+   * @param userAddress - Optional user address (not used, kept for API compatibility)
    * @param faucetUrl - Optional faucet URL override
    * @returns LineraConnection with client, wallet, chainId, etc.
    */
@@ -138,7 +136,7 @@ class LineraAdapterClass {
     }
 
     // Start new connection
-    this.connectPromise = this.performConnect(userAddress, faucetUrl);
+    this.connectPromise = this.performConnect(faucetUrl);
     
     try {
       const connection = await this.connectPromise;
@@ -152,7 +150,6 @@ class LineraAdapterClass {
    * Internal connection implementation
    */
   private async performConnect(
-    userAddress?: string,
     faucetUrl: string = DEFAULT_FAUCET_URL
   ): Promise<LineraConnection> {
     try {
@@ -163,7 +160,7 @@ class LineraAdapterClass {
       
       // Step 2: Dynamically load @linera/client
       const lineraModule = await getLineraClient();
-      const { Faucet, Client } = lineraModule;
+      const { Faucet, Client, signer: signerModule } = lineraModule;
       
       // Step 3: Create faucet connection
       console.log(`📡 Connecting to faucet: ${faucetUrl}`);
@@ -173,27 +170,11 @@ class LineraAdapterClass {
       console.log('👛 Creating Linera wallet...');
       const wallet = await faucet.createWallet();
       
-      // Step 5: Create signers
-      // Try MetaMask first, fall back to auto-signer
-      let signer: Signer;
-      let address: string;
-      
-      if (userAddress) {
-        address = userAddress.toLowerCase();
-        const metaMaskSigner = await createMetaMaskSigner();
-        if (metaMaskSigner) {
-          signer = metaMaskSigner;
-          console.log('🦊 Using MetaMask signer');
-        } else {
-          signer = new AutoSigner();
-          console.log('🔑 MetaMask not available, using auto-signer');
-        }
-      } else {
-        const autoSigner = new AutoSigner();
-        signer = autoSigner;
-        address = autoSigner.getAddress();
-        console.log('🔑 Using auto-signer');
-      }
+      // Step 5: Create auto-signer for automatic signing
+      console.log('🔑 Creating auto-signer...');
+      const privateKey = signerModule.PrivateKey.createRandom();
+      const address = privateKey.address();
+      console.log(`   Signer address: ${address}`);
       
       // Step 6: Claim a microchain for the address
       console.log(`⛓️ Claiming microchain for ${address}...`);
@@ -202,24 +183,10 @@ class LineraAdapterClass {
       
       // Step 7: Create Linera client with signer
       console.log('🔗 Creating Linera client...');
-      const client = await new Client(wallet, signer);
+      const client = await new Client(wallet, privateKey);
       
-      // Step 8: Connect to chain and set up auto-signer as owner
-      console.log('⛓️ Connecting to chain...');
-      const chain = await client.chain(chainId);
-      
-      // Create auto-signer for automatic operations
-      const autoSigner = new AutoSigner();
-      const autoSignerAddress = autoSigner.getAddress();
-      
-      // Try to add auto-signer as owner (may fail if not supported)
-      try {
-        await chain.addOwner(autoSignerAddress);
-        await wallet.setOwner(chainId, autoSignerAddress);
-        console.log('✅ Auto-signing enabled!');
-      } catch (error) {
-        console.log('ℹ️ Auto-signing not enabled:', error);
-      }
+      // Create our signer wrapper
+      const signer = new AutoSigner();
       
       // Store connection
       this.connection = {
@@ -229,7 +196,6 @@ class LineraAdapterClass {
         chainId,
         address,
         signer,
-        autoSignerAddress,
       };
       
       console.log('✅ Connected to Linera successfully!');
@@ -418,10 +384,10 @@ class LineraAdapterClass {
   }
 
   /**
-   * Get auto-signer address
+   * Get signer address
    */
-  getAutoSignerAddress(): string | null {
-    return this.connection?.autoSignerAddress ?? null;
+  getSignerAddress(): string | null {
+    return this.connection?.address ?? null;
   }
 
   /**

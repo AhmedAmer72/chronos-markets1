@@ -7,10 +7,7 @@ export { ensureWasmInitialized, isWasmReady, resetWasmInit } from './wasmInit';
 
 // Signers
 export { 
-  MetaMaskSigner, 
-  DevSigner, 
   AutoSigner, 
-  createMetaMaskSigner,
   type Signer 
 } from './signers';
 
