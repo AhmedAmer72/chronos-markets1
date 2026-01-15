@@ -259,29 +259,40 @@ class LineraAdapterClass {
     try {
       console.log(`🎮 Connecting to application: ${applicationId.slice(0, 16)}...`);
       
-      // Wait for client sync to complete using stored promise
-      // This properly awaits the thenable, unlike Promise.resolve()
-      if (!this.clientSyncPromise) {
-        throw new Error('Client sync promise not available');
+      // Try to use the client directly without waiting for full sync
+      // The client thenable should have chain() method available
+      console.log('🔗 Accessing chain with client...');
+      
+      // Try using the client directly first (it may work before sync completes)
+      let resolvedClient = this.connection.client;
+      
+      // Check if we have a sync promise and it's already resolved
+      if (this.clientSyncPromise) {
+        // Try a short wait (5 seconds) to see if sync is already done
+        const quickCheck = Promise.race([
+          this.clientSyncPromise,
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000))
+        ]);
+        
+        const result = await quickCheck;
+        if (result) {
+          console.log('✅ Client sync completed quickly!');
+          resolvedClient = result;
+          this.connection.client = resolvedClient;
+        } else {
+          console.log('⏳ Sync still in progress, trying direct access...');
+        }
       }
       
-      console.log('⏳ Waiting for client sync to complete...');
-      console.log('   (This may take 30-90 seconds on first connection)');
-      
-      // Await the stored sync promise with a longer timeout (2 minutes)
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('Client sync timeout (120s). The network may be congested.')), 120000);
-      });
-      
-      const resolvedClient = await Promise.race([this.clientSyncPromise, timeoutPromise]);
-      console.log('✅ Client sync completed!');
-      
-      // Update the connection with resolved client
-      this.connection.client = resolvedClient;
-      
-      // Get chain instance first, then get application
+      // Get chain instance - this might work even before full sync
+      console.log('⛓️ Getting chain instance...');
       const chain = await resolvedClient.chain(this.connection.chainId);
+      console.log('✅ Got chain instance!');
+      
+      // Get application
+      console.log('📱 Getting application instance...');
       const application = await chain.application(applicationId);
+      console.log('✅ Got application instance!');
       
       // Set up notifications on the chain for real-time updates
       this.setupChainNotifications(chain);
