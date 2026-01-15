@@ -88,6 +88,9 @@ class LineraAdapterClass {
   private appConnection: ApplicationConnection | null = null;
   private connectPromise: Promise<LineraConnection> | null = null;
   
+  // Store the client sync promise for lazy awaiting
+  private clientSyncPromise: Promise<Client> | null = null;
+  
   // Listeners for state changes
   private listeners: Set<StateChangeListener> = new Set();
 
@@ -183,22 +186,24 @@ class LineraAdapterClass {
       
       // Step 7: Create Linera client with signer
       // The Client constructor returns a thenable that syncs with validators
-      // This can take a long time, so we do it in background and return immediately
-      console.log('🔗 Creating Linera client (background sync)...');
+      // Store the sync promise so we can await it later when needed
+      console.log('🔗 Creating Linera client...');
       
-      // Start the client creation but don't wait for full sync
+      // Create the client thenable and store the async resolution
       const clientThenable = new Client(wallet, privateKey);
       
-      // The client is a "thenable" - it has a .then() but we can use it immediately
-      // for some operations before the sync completes
-      const client = clientThenable;
-      console.log('✅ Linera client initialized (syncing in background)...');
+      // Store a promise that resolves when client is fully synced
+      // This allows us to await it later in connectApplication
+      this.clientSyncPromise = (async () => {
+        console.log('🔄 Starting validator sync...');
+        const resolved = await clientThenable;
+        console.log('✅ Validator sync completed!');
+        return resolved;
+      })();
       
-      // Start background sync with a longer timeout (90 seconds)
-      // This will complete validator sync in the background
-      this.startBackgroundSync(client, chainId).catch(err => {
-        console.warn('⚠️ Background sync warning:', err.message);
-      });
+      // For now, store the thenable as the client (will be resolved later)
+      const client = clientThenable;
+      console.log('✅ Linera client created (sync in progress)...');
       
       // Create our signer wrapper
       const signer = new AutoSigner();
@@ -254,18 +259,25 @@ class LineraAdapterClass {
     try {
       console.log(`🎮 Connecting to application: ${applicationId.slice(0, 16)}...`);
       
-      // The client is a thenable - we need to await it to get the resolved Client
-      // before we can call .chain() on it
-      console.log('⏳ Waiting for client sync to complete...');
+      // Wait for client sync to complete using stored promise
+      // This properly awaits the thenable, unlike Promise.resolve()
+      if (!this.clientSyncPromise) {
+        throw new Error('Client sync promise not available');
+      }
       
-      // Await the client thenable with a timeout
-      const clientPromise = Promise.resolve(this.connection.client);
+      console.log('⏳ Waiting for client sync to complete...');
+      console.log('   (This may take 30-90 seconds on first connection)');
+      
+      // Await the stored sync promise with a longer timeout (2 minutes)
       const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('Client sync timeout (60s)')), 60000);
+        setTimeout(() => reject(new Error('Client sync timeout (120s). The network may be congested.')), 120000);
       });
       
-      const resolvedClient = await Promise.race([clientPromise, timeoutPromise]);
+      const resolvedClient = await Promise.race([this.clientSyncPromise, timeoutPromise]);
       console.log('✅ Client sync completed!');
+      
+      // Update the connection with resolved client
+      this.connection.client = resolvedClient;
       
       // Get chain instance first, then get application
       const chain = await resolvedClient.chain(this.connection.chainId);
@@ -354,29 +366,6 @@ class LineraAdapterClass {
   }
 
   /**
-   * Start background sync with validators
-   * This allows the UI to be responsive while syncing continues
-   */
-  private async startBackgroundSync(client: Client, chainId: string): Promise<void> {
-    console.log('🔄 Starting background validator sync...');
-    
-    try {
-      // Wait for the client to fully sync (this is where the actual sync happens)
-      await Promise.race([
-        client,  // The client is a thenable
-        new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('Background sync timeout')), 90000)
-        )
-      ]);
-      
-      console.log('✅ Background sync completed successfully!');
-    } catch (error) {
-      // Background sync failure is not fatal - we can still use cached/local state
-      console.warn('⚠️ Background sync incomplete:', error instanceof Error ? error.message : error);
-    }
-  }
-
-  /**
    * Set up notification listener on a chain for real-time updates
    */
   private setupChainNotifications(chain: Chain): void {
@@ -449,6 +438,7 @@ class LineraAdapterClass {
     this.connection = null;
     this.appConnection = null;
     this.connectPromise = null;
+    this.clientSyncPromise = null;
     this.notifyListeners();
   }
 
