@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { getPortfolio } from '../services/mockApi';
+import { getPortfolio, isConnected } from '../services/marketService';
 import { Position, ResolvedMarket, ShareType } from '../types';
+import { useWallet } from '../contexts/WalletContext';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, PieChart, Pie, Cell, BarChart, Bar } from 'recharts';
 
 interface PortfolioData {
@@ -99,17 +100,40 @@ const PortfolioPage: React.FC = () => {
     useEffect(() => {
         const fetchPortfolio = async () => {
             setLoading(true);
-            const portfolioData = await getPortfolio();
-            setData(portfolioData as PortfolioData);
+            if (isConnected()) {
+                const portfolioData = await getPortfolio();
+                setData(portfolioData as PortfolioData);
+            } else {
+                // Default empty state
+                setData({
+                    summary: { totalValue: 0, totalPL: 0, availableFunds: 0 },
+                    positions: [],
+                    resolved: []
+                });
+            }
             setLoading(false);
         };
         fetchPortfolio();
     }, []);
     
+    const { wallet } = useWallet();
     const PLColor = (pl: number) => pl >= 0 ? 'text-brand-yes' : 'text-brand-danger';
 
-    if (loading || !data) {
+    if (loading) {
         return <div className="text-center p-10">Loading portfolio...</div>;
+    }
+
+    if (!wallet.isConnected) {
+        return (
+            <div className="text-center p-10 bg-brand-surface/50 rounded-xl border border-brand-border max-w-md mx-auto mt-10">
+                <h2 className="text-xl font-semibold text-brand-text mb-2">Connect Wallet</h2>
+                <p className="text-brand-secondary">Connect your wallet to view your portfolio and positions.</p>
+            </div>
+        );
+    }
+
+    if (!data) {
+        return <div className="text-center p-10">No portfolio data available</div>;
     }
 
     return (

@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { Market } from '../types';
-import { getMarkets } from '../services/mockApi';
+import { getMarkets, isApplicationConnected } from '../services/marketService';
+import { useWallet } from '../contexts/WalletContext';
 import { LineChart, Line, ResponsiveContainer, YAxis, Tooltip } from 'recharts';
 import { ArrowRightIcon } from './icons';
 
@@ -52,6 +53,7 @@ const MarketCard: React.FC<{ market: Market }> = ({ market }) => (
 );
 
 const MarketsPage: React.FC = () => {
+  const { wallet } = useWallet();
   const [markets, setMarkets] = useState<Market[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeCategory, setActiveCategory] = useState('All');
@@ -61,16 +63,22 @@ const MarketsPage: React.FC = () => {
     const fetchMarkets = async () => {
       setLoading(true);
       try {
-        const data = await getMarkets();
-        console.log('Fetched markets:', data);
-        setMarkets(data);
+        if (isApplicationConnected()) {
+          const data = await getMarkets();
+          console.log('📊 Fetched markets from blockchain:', data.length);
+          setMarkets(data);
+        } else {
+          console.log('⏳ Waiting for wallet connection to load markets');
+          setMarkets([]);
+        }
       } catch (error) {
         console.error('Error fetching markets:', error);
+        setMarkets([]);
       }
       setLoading(false);
     };
     fetchMarkets();
-  }, []);
+  }, [wallet.isConnected]); // Re-fetch when wallet connects
 
   const categories = useMemo(() => ['All', 'Politics', 'Crypto', 'Sports', 'Science & Tech', 'Culture'], []);
 
@@ -121,7 +129,12 @@ const MarketsPage: React.FC = () => {
         </div>
       </div>
 
-      {filteredAndSortedMarkets.length > 0 ? (
+      {!wallet.isConnected ? (
+        <div className="text-center p-10 bg-brand-surface/50 rounded-xl border border-brand-border">
+          <h2 className="text-xl font-semibold text-brand-text mb-2">Connect Wallet to View Markets</h2>
+          <p className="text-brand-secondary mb-4">Connect your wallet to access prediction markets on the Linera blockchain.</p>
+        </div>
+      ) : filteredAndSortedMarkets.length > 0 ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
           {filteredAndSortedMarkets.map((market, i) => (
             <div key={market.id} style={{animationDelay: `${i * 50}ms`}}>
@@ -131,7 +144,7 @@ const MarketsPage: React.FC = () => {
         </div>
       ) : (
         <div className="text-center p-10 text-brand-secondary">
-          No markets found for the selected category.
+          No markets found. Be the first to create one!
         </div>
       )}
     </div>

@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams } from 'react-router-dom';
-import { getMarketById, getOrderBook, getTradeHistory } from '../services/mockApi';
+import { getMarketById, getOrderBook, getTradeHistory, buyShares, sellShares, isApplicationConnected } from '../services/marketService';
 import { Market, Order, Trade, OrderType, ShareType } from '../types';
+import { useWallet } from '../contexts/WalletContext';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import { InfoIcon, ClockIcon } from './icons';
 
@@ -58,40 +59,82 @@ const MarketChart: React.FC<{ data: { time: number, value: number }[] }> = ({ da
     );
 };
 
-const TradeWidget: React.FC = () => {
+const TradeWidget: React.FC<{ marketId?: string }> = ({ marketId }) => {
+    const { wallet } = useWallet();
     const [tradeMode, setTradeMode] = useState<'market' | 'limit'>('market');
     const [orderType, setOrderType] = useState<OrderType>(OrderType.BUY);
     const [shareType, setShareType] = useState<ShareType>(ShareType.YES);
     const [amount, setAmount] = useState('');
-    const [price, setPrice] = useState('0.62');
-    const [expiryType, setExpiryType] = useState<'gtc' | 'gtt' | 'ioc'>('gtc'); // Good Till Cancelled, Good Till Time, Immediate Or Cancel
+    const [price, setPrice] = useState('0.50');
+    const [expiryType, setExpiryType] = useState<'gtc' | 'gtt' | 'ioc'>('gtc');
     const [expiryTime, setExpiryTime] = useState('');
-    const [openOrders, setOpenOrders] = useState<{ id: number; type: 'buy' | 'sell'; share: 'yes' | 'no'; price: string; amount: string; filled: string; expiry: string }[]>([
-        { id: 1, type: 'buy', share: 'yes', price: '0.58', amount: '100', filled: '35', expiry: 'GTC' },
-        { id: 2, type: 'sell', share: 'no', price: '0.42', amount: '50', filled: '0', expiry: '2h 15m' },
-    ]);
+    const [openOrders, setOpenOrders] = useState<{ id: number; type: 'buy' | 'sell'; share: 'yes' | 'no'; price: string; amount: string; filled: string; expiry: string }[]>([]);
     const [showOrders, setShowOrders] = useState(false);
+    const [isSubmitting, setIsSubmitting] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [success, setSuccess] = useState<string | null>(null);
 
     const cost = (parseFloat(amount) || 0) * (parseFloat(price) || 0);
     const payout = (parseFloat(amount) || 0) * 1;
     const isYes = shareType === ShareType.YES;
 
-    const handlePlaceOrder = () => {
+    const handlePlaceOrder = async () => {
         if (!amount || !price) return;
-        if (tradeMode === 'limit') {
-            const newOrder = {
-                id: Date.now(),
-                type: orderType === OrderType.BUY ? 'buy' : 'sell' as 'buy' | 'sell',
-                share: isYes ? 'yes' : 'no' as 'yes' | 'no',
-                price,
-                amount,
-                filled: '0',
-                expiry: expiryType === 'gtc' ? 'GTC' : expiryType === 'ioc' ? 'IOC' : expiryTime || '24h'
-            };
-            setOpenOrders([newOrder, ...openOrders]);
-            setAmount('');
+        if (!wallet.isConnected) {
+            setError('Please connect your wallet first');
+            return;
         }
-        // For market orders, would submit immediately
+        if (!isApplicationConnected()) {
+            setError('Application not connected. Please reconnect your wallet.');
+            return;
+        }
+        if (!marketId) {
+            setError('Market ID not found');
+            return;
+        }
+
+        setIsSubmitting(true);
+        setError(null);
+        setSuccess(null);
+
+        try {
+            if (orderType === OrderType.BUY) {
+                console.log('💰 Buying shares:', { marketId, isYes, amount, maxCost: cost.toString() });
+                const result = await buyShares({
+                    marketId,
+                    isYes,
+                    shares: amount,
+                    maxCost: cost.toFixed(6),
+                });
+                
+                if (result.success) {
+                    setSuccess(`✅ Successfully bought ${result.shares || amount} ${isYes ? 'YES' : 'NO'} shares!`);
+                    setAmount('');
+                } else {
+                    throw new Error(result.error || 'Failed to buy shares');
+                }
+            } else {
+                console.log('💸 Selling shares:', { marketId, isYes, amount, minReturn: (cost * 0.95).toString() });
+                const result = await sellShares({
+                    marketId,
+                    isYes,
+                    shares: amount,
+                    minReturn: (cost * 0.95).toFixed(6),
+                });
+                
+                if (result.success) {
+                    setSuccess(`✅ Successfully sold ${amount} ${isYes ? 'YES' : 'NO'} shares for ${result.returnAmount || cost.toFixed(2)}!`);
+                    setAmount('');
+                } else {
+                    throw new Error(result.error || 'Failed to sell shares');
+                }
+            }
+        } catch (err) {
+            console.error('❌ Trade failed:', err);
+            setError(err instanceof Error ? err.message : 'Trade failed. Please try again.');
+        } finally {
+            setIsSubmitting(false);
+        }
     };
 
     const cancelOrder = (id: number) => {
@@ -190,11 +233,41 @@ const TradeWidget: React.FC = () => {
                 <div className="flex justify-between"><span>Potential Payout:</span> <span className="font-mono text-brand-text">${payout.toFixed(2)}</span></div>
             </div>
 
+            {/* Error/Success Messages */}
+            {error && (
+                <div className="mt-3 p-2 bg-red-900/20 border border-red-700 rounded text-red-400 text-xs">
+                    ⚠️ {error}
+                </div>
+            )}
+            {success && (
+                <div className="mt-3 p-2 bg-green-900/20 border border-green-700 rounded text-green-400 text-xs">
+                    {success}
+                </div>
+            )}
+
+            {/* Wallet Warning */}
+            {!wallet.isConnected && (
+                <div className="mt-3 p-2 bg-yellow-900/20 border border-yellow-700 rounded text-yellow-400 text-xs">
+                    ⚠️ Connect wallet to trade
+                </div>
+            )}
+
             <button 
                 onClick={handlePlaceOrder}
-                className={`w-full mt-4 py-3 rounded-md font-bold text-white transition-colors text-lg ${orderType === OrderType.BUY ? 'bg-brand-success hover:bg-green-700' : 'bg-brand-danger hover:bg-red-700'}`}
+                disabled={isSubmitting || !wallet.isConnected || !amount}
+                className={`w-full mt-4 py-3 rounded-md font-bold text-white transition-colors text-lg disabled:opacity-50 disabled:cursor-not-allowed ${orderType === OrderType.BUY ? 'bg-brand-success hover:bg-green-700' : 'bg-brand-danger hover:bg-red-700'}`}
             >
-                {tradeMode === 'market' ? 'Place Market Order' : 'Place Limit Order'}
+                {isSubmitting ? (
+                    <span className="flex items-center justify-center gap-2">
+                        <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        Processing...
+                    </span>
+                ) : (
+                    orderType === OrderType.BUY ? 'Buy Shares' : 'Sell Shares'
+                )}
             </button>
 
             {/* Open Orders Section */}
@@ -385,10 +458,10 @@ const MarketPage: React.FC = () => {
                     </div>
                 </div>
                 <div className="space-y-4 animate-fadeIn" style={{ animationDelay: '300ms' }}>
-                    <TradeWidget />
+                    <TradeWidget marketId={id} />
                      <div className="bg-brand-surface border border-brand-border rounded-lg p-4">
                         <h3 className="font-semibold text-brand-text mb-2">Your Positions</h3>
-                        <p className="text-sm text-brand-secondary">You have 150 YES shares. Current Value: <span className="font-mono text-brand-text">$93.00</span></p>
+                        <p className="text-sm text-brand-secondary">Connect wallet to view your positions in this market.</p>
                     </div>
                 </div>
             </div>

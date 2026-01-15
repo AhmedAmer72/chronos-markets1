@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Link } from 'react-router-dom';
-import { getMarkets } from '../services/mockApi';
+import { getMarkets, isApplicationConnected } from '../services/marketService';
 import { Market } from '../types';
+import { useWallet } from '../contexts/WalletContext';
 import { LineChart, Line, ResponsiveContainer, YAxis, Tooltip } from 'recharts';
 import { TrendingUpIcon, UsersIcon, ZapIcon, ArrowRightIcon } from './icons';
 
@@ -75,6 +76,7 @@ const MarketTicker: React.FC<{ markets: Market[] }> = ({ markets }) => {
 
 
 const HomePage: React.FC = () => {
+    const { wallet } = useWallet();
     const [markets, setMarkets] = useState<Market[]>([]);
     const [loading, setLoading] = useState(true);
     const [activeCategory, setActiveCategory] = useState('All');
@@ -83,12 +85,19 @@ const HomePage: React.FC = () => {
     useEffect(() => {
         const fetchMarkets = async () => {
             setLoading(true);
-            const data = await getMarkets();
-            setMarkets(data);
+            // Only fetch if application is connected
+            if (isApplicationConnected()) {
+                const data = await getMarkets();
+                console.log('📊 Loaded markets from blockchain:', data.length);
+                setMarkets(data);
+            } else {
+                console.log('⏳ Waiting for wallet connection to load markets');
+                setMarkets([]);
+            }
             setLoading(false);
         };
         fetchMarkets();
-    }, []);
+    }, [wallet.isConnected]); // Re-fetch when wallet connects
 
     const categories = useMemo(() => ['All', 'Politics', 'Crypto', 'Sports', 'Science & Tech', 'Culture'], []);
 

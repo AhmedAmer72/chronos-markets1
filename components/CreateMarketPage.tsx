@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import chronosContract from '../services/chronosContract';
+import { createMarket, isApplicationConnected } from '../services/marketService';
 import { useWallet } from '../contexts/WalletContext';
 
 const CreateMarketPage: React.FC = () => {
@@ -46,6 +46,12 @@ const CreateMarketPage: React.FC = () => {
             return;
         }
 
+        // Check application connection
+        if (!isApplicationConnected()) {
+            setError('Application not connected. Please reconnect your wallet.');
+            return;
+        }
+
         setIsSubmitting(true);
         setError(null);
 
@@ -54,17 +60,20 @@ const CreateMarketPage: React.FC = () => {
             const endDateTime = new Date(`${marketData.endDate}T${marketData.endTime}`);
             const endTimeUnix = Math.floor(endDateTime.getTime() / 1000);
 
-            console.log('Creating market:', {
+            // Determine category based on oracle or default
+            const categories = [marketData.oracle || 'General'];
+
+            console.log('📝 Creating market on blockchain:', {
                 question: marketData.question,
-                description: marketData.details,
+                categories,
                 endTime: endTimeUnix,
                 initialLiquidity: marketData.liquidity
             });
 
-            // Call smart contract
-            const result = await chronosContract.createMarket({
+            // Call blockchain via marketService
+            const result = await createMarket({
                 question: marketData.question,
-                description: marketData.details || `Oracle: ${marketData.oracle}`,
+                categories,
                 endTime: endTimeUnix,
                 initialLiquidity: marketData.liquidity
             });
@@ -73,7 +82,7 @@ const CreateMarketPage: React.FC = () => {
                 console.log('✅ Market created successfully! ID:', result.marketId);
                 
                 // Show success message
-                alert(`🎉 Market created successfully!\n\nMarket ID: ${result.marketId}\n\nRedirecting to markets page...`);
+                alert(`🎉 Market created successfully on Linera blockchain!\n\nMarket ID: ${result.marketId}\n\nRedirecting to markets page...`);
                 
                 // Navigate to markets page
                 navigate('/markets');
