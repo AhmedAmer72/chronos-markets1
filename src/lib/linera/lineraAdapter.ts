@@ -182,8 +182,11 @@ class LineraAdapterClass {
       console.log(`✅ Claimed chain: ${chainId}`);
       
       // Step 7: Create Linera client with signer
+      // Note: Client constructor returns a Promise, need to await it
       console.log('🔗 Creating Linera client...');
-      const client = await new Client(wallet, privateKey);
+      const clientResult = new Client(wallet, privateKey);
+      const client = await clientResult;
+      console.log('✅ Linera client created!');
       
       // Create our signer wrapper
       const signer = new AutoSigner();
