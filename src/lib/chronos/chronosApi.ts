@@ -174,6 +174,7 @@ class ChronosApiClass {
 
   /**
    * Create a new market
+   * endTime should be in microseconds (Linera Timestamp)
    */
   async createMarket(params: {
     question: string;
@@ -189,7 +190,7 @@ class ChronosApiClass {
         {
           question: params.question,
           categories: params.categories,
-          endTime: params.endTime,
+          endTime: params.endTime.toString(), // Convert to string for large microsecond values
           initialLiquidity: params.initialLiquidity,
         }
       );

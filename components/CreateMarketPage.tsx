@@ -56,9 +56,10 @@ const CreateMarketPage: React.FC = () => {
         setError(null);
 
         try {
-            // Convert date/time to Unix timestamp
+            // Convert date/time to Unix timestamp in MICROSECONDS
+            // Linera Timestamp is in microseconds (not seconds)
             const endDateTime = new Date(`${marketData.endDate}T${marketData.endTime}`);
-            const endTimeUnix = Math.floor(endDateTime.getTime() / 1000);
+            const endTimeMicros = Math.floor(endDateTime.getTime() * 1000); // milliseconds * 1000 = microseconds
 
             // Determine category based on oracle or default
             const categories = [marketData.oracle || 'General'];
@@ -66,7 +67,7 @@ const CreateMarketPage: React.FC = () => {
             console.log('📝 Creating market on blockchain:', {
                 question: marketData.question,
                 categories,
-                endTime: endTimeUnix,
+                endTime: endTimeMicros,
                 initialLiquidity: marketData.liquidity
             });
 
@@ -74,7 +75,7 @@ const CreateMarketPage: React.FC = () => {
             const result = await createMarket({
                 question: marketData.question,
                 categories,
-                endTime: endTimeUnix,
+                endTime: endTimeMicros,
                 initialLiquidity: marketData.liquidity
             });
 
