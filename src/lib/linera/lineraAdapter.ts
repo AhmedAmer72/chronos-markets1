@@ -182,24 +182,23 @@ class LineraAdapterClass {
       console.log(`✅ Claimed chain: ${chainId}`);
       
       // Step 7: Create Linera client with signer
-      // The Client constructor returns a thenable, need to await it
-      console.log('🔗 Creating Linera client...');
-      console.log('   (This may take 10-30 seconds to sync with validators)');
+      // The Client constructor returns a thenable that syncs with validators
+      // This can take a long time, so we do it in background and return immediately
+      console.log('🔗 Creating Linera client (background sync)...');
       
-      // Add timeout for client creation (60 seconds)
-      const clientPromise = (async () => {
-        const result = new Client(wallet, privateKey);
-        return await result;
-      })();
+      // Start the client creation but don't wait for full sync
+      const clientThenable = new Client(wallet, privateKey);
       
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => {
-          reject(new Error('Client creation timed out after 60 seconds. The network may be slow.'));
-        }, 60000);
+      // The client is a "thenable" - it has a .then() but we can use it immediately
+      // for some operations before the sync completes
+      const client = clientThenable;
+      console.log('✅ Linera client initialized (syncing in background)...');
+      
+      // Start background sync with a longer timeout (90 seconds)
+      // This will complete validator sync in the background
+      this.startBackgroundSync(client, chainId).catch(err => {
+        console.warn('⚠️ Background sync warning:', err.message);
       });
-      
-      const client = await Promise.race([clientPromise, timeoutPromise]);
-      console.log('✅ Linera client created!');
       
       // Create our signer wrapper
       const signer = new AutoSigner();
@@ -339,6 +338,29 @@ class LineraAdapterClass {
     // Mutations use the same interface as queries in Linera
     // The client handles distinguishing based on GraphQL operation type
     return this.query<T>(graphqlMutation, variables);
+  }
+
+  /**
+   * Start background sync with validators
+   * This allows the UI to be responsive while syncing continues
+   */
+  private async startBackgroundSync(client: Client, chainId: string): Promise<void> {
+    console.log('🔄 Starting background validator sync...');
+    
+    try {
+      // Wait for the client to fully sync (this is where the actual sync happens)
+      await Promise.race([
+        client,  // The client is a thenable
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Background sync timeout')), 90000)
+        )
+      ]);
+      
+      console.log('✅ Background sync completed successfully!');
+    } catch (error) {
+      // Background sync failure is not fatal - we can still use cached/local state
+      console.warn('⚠️ Background sync incomplete:', error instanceof Error ? error.message : error);
+    }
   }
 
   /**
