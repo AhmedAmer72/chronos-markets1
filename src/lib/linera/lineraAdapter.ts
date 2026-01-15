@@ -182,10 +182,23 @@ class LineraAdapterClass {
       console.log(`✅ Claimed chain: ${chainId}`);
       
       // Step 7: Create Linera client with signer
-      // Note: Client constructor returns a Promise, need to await it
+      // The Client constructor returns a thenable, need to await it
       console.log('🔗 Creating Linera client...');
-      const clientResult = new Client(wallet, privateKey);
-      const client = await clientResult;
+      console.log('   (This may take 10-30 seconds to sync with validators)');
+      
+      // Add timeout for client creation (60 seconds)
+      const clientPromise = (async () => {
+        const result = new Client(wallet, privateKey);
+        return await result;
+      })();
+      
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => {
+          reject(new Error('Client creation timed out after 60 seconds. The network may be slow.'));
+        }, 60000);
+      });
+      
+      const client = await Promise.race([clientPromise, timeoutPromise]);
       console.log('✅ Linera client created!');
       
       // Create our signer wrapper
