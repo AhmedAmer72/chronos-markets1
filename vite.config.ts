@@ -38,7 +38,8 @@ export default defineConfig(({ mode }) => {
       },
       // Optimize deps for Linera client
       optimizeDeps: {
-        exclude: ['@linera/client'],
+        // Include @linera/client for proper optimization
+        include: ['@linera/client'],
         esbuildOptions: {
           target: 'esnext',
         },
@@ -48,11 +49,22 @@ export default defineConfig(({ mode }) => {
           'top-level-await': true,
         },
       },
+      // Worker configuration for WASM
+      worker: {
+        format: 'es',
+        plugins: () => [react()],
+      },
       build: {
         target: 'esnext',
         rollupOptions: {
           input: {
             main: path.resolve(__dirname, 'index.html'),
+          },
+          output: {
+            // Ensure workers are properly handled
+            manualChunks: {
+              linera: ['@linera/client'],
+            },
           },
         },
         // Don't externalize @linera/client, let it be bundled
