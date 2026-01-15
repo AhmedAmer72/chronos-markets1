@@ -167,14 +167,14 @@ export const GET_USER_STATS = `
 
 /**
  * Create a new market
- * Note: endTime is Linera Timestamp (microseconds since epoch) - use String for large values
- * initialLiquidity is Amount (attos) - also use String
+ * Note: endTime is Linera Timestamp (microseconds since epoch)
+ * initialLiquidity is Amount (attos)
  */
 export const CREATE_MARKET = `
   mutation CreateMarket(
     $question: String!,
     $categories: [String!]!,
-    $endTime: String!,
+    $endTime: Timestamp!,
     $initialLiquidity: String!
   ) {
     createMarket(

@@ -190,7 +190,7 @@ class ChronosApiClass {
         {
           question: params.question,
           categories: params.categories,
-          endTime: params.endTime.toString(), // Convert to string for large microsecond values
+          endTime: params.endTime, // Pass as number (u64), not string
           initialLiquidity: params.initialLiquidity,
         }
       );
