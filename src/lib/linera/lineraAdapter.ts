@@ -184,26 +184,37 @@ class LineraAdapterClass {
       const chainId = await faucet.claimChain(wallet, address);
       console.log(`✅ Claimed chain: ${chainId}`);
       
-      // Step 7: Create Linera client with signer
-      // The Client constructor returns a thenable that syncs with validators
-      // Store the sync promise so we can await it later when needed
-      console.log('🔗 Creating Linera client...');
+      // Step 7: Create Linera client with signer and WAIT for sync
+      // This is the approach used by Linera-Arcade - they await the client fully
+      console.log('🔗 Creating Linera client and syncing with validators...');
+      console.log('   ⏳ This may take 1-3 minutes on first connection...');
       
-      // Create the client thenable and store the async resolution
       const clientThenable = new Client(wallet, privateKey);
       
-      // Store a promise that resolves when client is fully synced
-      // This allows us to await it later in connectApplication
-      this.clientSyncPromise = (async () => {
-        console.log('🔄 Starting validator sync...');
-        const resolved = await clientThenable;
-        console.log('✅ Validator sync completed!');
-        return resolved;
-      })();
+      // Store the thenable as a promise for later use
+      this.clientSyncPromise = Promise.resolve(clientThenable);
       
-      // For now, store the thenable as the client (will be resolved later)
-      const client = clientThenable;
-      console.log('✅ Linera client created (sync in progress)...');
+      // Try to await with a very long timeout (3 minutes)
+      // If this fails, we'll fall back to mock mode
+      const timeoutMs = 180000; // 3 minutes
+      const timeoutPromise = new Promise<Client>((_, reject) => {
+        setTimeout(() => {
+          reject(new Error(`SYNC_TIMEOUT: Client sync did not complete in ${timeoutMs/1000}s`));
+        }, timeoutMs);
+      });
+      
+      let client: Client;
+      try {
+        client = await Promise.race([clientThenable, timeoutPromise]);
+        console.log('✅ Linera client synced successfully!');
+      } catch (syncError) {
+        // Sync failed - store partial connection and let app decide what to do
+        console.warn('⚠️ Client sync incomplete:', syncError);
+        console.log('📝 Storing partial connection - some features may be limited');
+        
+        // Store the unresolved thenable - operations will need to await it
+        client = clientThenable;
+      }
       
       // Create our signer wrapper
       const signer = new AutoSigner();
@@ -259,32 +270,28 @@ class LineraAdapterClass {
     try {
       console.log(`🎮 Connecting to application: ${applicationId.slice(0, 16)}...`);
       
-      // Try to use the client directly without waiting for full sync
-      // The client thenable should have chain() method available
-      console.log('🔗 Accessing chain with client...');
-      
-      // Try using the client directly first (it may work before sync completes)
+      // Ensure client is resolved (await in case it's still a thenable)
       let resolvedClient = this.connection.client;
       
-      // Check if we have a sync promise and it's already resolved
-      if (this.clientSyncPromise) {
-        // Try a short wait (5 seconds) to see if sync is already done
-        const quickCheck = Promise.race([
-          this.clientSyncPromise,
-          new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000))
-        ]);
+      // Check if client has .chain method - if not, it's still a thenable
+      if (typeof resolvedClient.chain !== 'function') {
+        console.log('⏳ Client still syncing, waiting for completion...');
         
-        const result = await quickCheck;
-        if (result) {
-          console.log('✅ Client sync completed quickly!');
-          resolvedClient = result;
+        // Try to await with timeout
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error('Client sync timeout during app connection')), 120000);
+        });
+        
+        try {
+          resolvedClient = await Promise.race([resolvedClient, timeoutPromise]);
           this.connection.client = resolvedClient;
-        } else {
-          console.log('⏳ Sync still in progress, trying direct access...');
+          console.log('✅ Client sync completed!');
+        } catch (syncErr) {
+          throw new Error('Client must be fully synced to connect to application. Please try again later.');
         }
       }
       
-      // Get chain instance - this might work even before full sync
+      // Get chain instance
       console.log('⛓️ Getting chain instance...');
       const chain = await resolvedClient.chain(this.connection.chainId);
       console.log('✅ Got chain instance!');
