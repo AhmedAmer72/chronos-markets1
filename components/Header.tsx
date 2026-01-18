@@ -42,6 +42,11 @@ const Header: React.FC = () => {
                     <div className="flex items-center space-x-4">
                         {wallet.isConnected ? (
                             <div className="flex items-center space-x-3">
+                                {/* Testnet indicator badge */}
+                                <div className="hidden sm:flex items-center space-x-1.5 px-2 py-1 bg-green-900/30 border border-green-500/50 rounded-md">
+                                    <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                                    <span className="text-xs font-medium text-green-400">Conway Testnet</span>
+                                </div>
                                 <div className="text-sm text-brand-secondary">
                                     {wallet.address?.slice(0, 6)}...{wallet.address?.slice(-4)}
                                 </div>
