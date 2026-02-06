@@ -14,6 +14,37 @@ use linera_sdk::{
 
 use self::state_new::MarketState;
 
+/// Safely compute (a * b) / c without u128 overflow.
+fn safe_mul_div(a: u128, b: u128, c: u128) -> u128 {
+    assert!(c > 0, "Division by zero");
+    if let Some(product) = a.checked_mul(b) {
+        return product / c;
+    }
+    let quotient = a / c;
+    let remainder = a % c;
+    let term1 = quotient.checked_mul(b).expect("AMM result overflow");
+    let term2 = match remainder.checked_mul(b) {
+        Some(rem_product) => rem_product / c,
+        None => {
+            let b_div_c = b / c;
+            let b_mod_c = b % c;
+            let sub1 = remainder.checked_mul(b_div_c).unwrap_or_else(|| {
+                let scale = 1_000_000_000u128;
+                (remainder / scale) * (b_div_c / scale) * scale
+            });
+            let sub2 = match remainder.checked_mul(b_mod_c) {
+                Some(p) => p / c,
+                None => {
+                    let scale = 1_000_000_000u128;
+                    (remainder / scale) * (b_mod_c / scale) / (c / (scale * scale)).max(1)
+                }
+            };
+            sub1 + sub2
+        }
+    };
+    term1 + term2
+}
+
 linera_sdk::contract!(MarketContract);
 
 pub struct MarketContract {
@@ -111,12 +142,15 @@ impl Contract for MarketContract {
                     (market.yes_pool, market.no_pool)
                 };
 
-                let k = pool_in.saturating_mul(pool_out);
-                let new_pool_out = pool_out.saturating_sub(shares);
-                assert!(new_pool_out > Amount::ZERO, "Not enough liquidity");
+                let pi = u128::from(pool_in);
+                let po = u128::from(pool_out);
+                let s = u128::from(shares);
 
-                let new_pool_in = k.try_div(new_pool_out).expect("Division error");
-                let cost = new_pool_in.saturating_sub(pool_in);
+                assert!(s < po, "Not enough liquidity");
+                let denominator = po - s;
+
+                // cost = pool_in * shares / (pool_out - shares)
+                let cost = Amount::from_attos(safe_mul_div(pi, s, denominator));
 
                 assert!(cost <= max_cost, "Cost exceeds maximum");
 

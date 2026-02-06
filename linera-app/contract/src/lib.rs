@@ -14,6 +14,55 @@ use linera_sdk::{
 
 use self::state::{MarketState, OrderStatus, ComboStatus, ComboLegState};
 
+/// Safely compute (a * b) / c without u128 overflow.
+///
+/// Uses algebraic decomposition: a*b/c = (a/c)*b + (a%c)*b/c
+/// This avoids the intermediate a*b product that can exceed u128::MAX
+/// when both a and b are large Linera Amount values in attos (10^18 scale).
+fn safe_mul_div(a: u128, b: u128, c: u128) -> u128 {
+    assert!(c > 0, "Division by zero");
+
+    // Fast path: if a * b fits in u128, do it directly
+    if let Some(product) = a.checked_mul(b) {
+        return product / c;
+    }
+
+    // Overflow path: decompose to avoid overflow
+    // a * b / c = (a / c) * b + (a % c) * b / c
+    let quotient = a / c;
+    let remainder = a % c;
+
+    // (a / c) * b — should fit since a/c is small for AMM values
+    let term1 = quotient.checked_mul(b).expect("AMM result overflow");
+
+    // (a % c) * b / c — remainder < c, so (a%c)*b/c < b
+    let term2 = match remainder.checked_mul(b) {
+        Some(rem_product) => rem_product / c,
+        None => {
+            // Even the remainder product overflows — use further decomposition
+            // Split b: b = (b/c)*c + (b%c)
+            // remainder * b / c = remainder * (b/c) + remainder * (b%c) / c
+            let b_div_c = b / c;
+            let b_mod_c = b % c;
+            let sub1 = remainder.checked_mul(b_div_c).unwrap_or_else(|| {
+                // Last resort: scale both down
+                let scale = 1_000_000_000u128; // 10^9
+                (remainder / scale) * (b_div_c / scale) * scale
+            });
+            let sub2 = match remainder.checked_mul(b_mod_c) {
+                Some(p) => p / c,
+                None => {
+                    let scale = 1_000_000_000u128;
+                    (remainder / scale) * (b_mod_c / scale) / (c / (scale * scale)).max(1)
+                }
+            };
+            sub1 + sub2
+        }
+    };
+
+    term1 + term2
+}
+
 linera_sdk::contract!(MarketContract);
 
 pub struct MarketContract {
@@ -112,12 +161,16 @@ impl Contract for MarketContract {
                     (market.yes_pool, market.no_pool)
                 };
 
-                let k_value = u128::from(pool_in) * u128::from(pool_out);
-                let new_pool_out = pool_out.saturating_sub(shares);
-                assert!(new_pool_out > Amount::ZERO, "Not enough liquidity");
+                let pi = u128::from(pool_in);
+                let po = u128::from(pool_out);
+                let s = u128::from(shares);
 
-                let new_pool_in = Amount::from_attos(k_value / u128::from(new_pool_out));
-                let cost = new_pool_in.saturating_sub(pool_in);
+                assert!(s < po, "Not enough liquidity");
+                let denominator = po - s;
+
+                // cost = pool_in * shares / (pool_out - shares)
+                // Uses safe_mul_div to avoid u128 overflow
+                let cost = Amount::from_attos(safe_mul_div(pi, s, denominator));
 
                 assert!(cost <= max_cost, "Cost exceeds maximum");
 
@@ -166,10 +219,14 @@ impl Contract for MarketContract {
                     (market.no_pool, market.yes_pool)
                 };
 
-                let k_value = u128::from(pool_in) * u128::from(pool_out);
-                let new_pool_in = pool_in.saturating_add(shares);
-                let new_pool_out = Amount::from_attos(k_value / u128::from(new_pool_in));
-                let proceeds = pool_out.saturating_sub(new_pool_out);
+                let po = u128::from(pool_out);
+                let pi = u128::from(pool_in);
+                let s = u128::from(shares);
+                let new_pool_in = pi + s;
+
+                // proceeds = pool_out * shares / (pool_in + shares)
+                // Uses safe_mul_div to avoid u128 overflow
+                let proceeds = Amount::from_attos(safe_mul_div(po, s, new_pool_in));
 
                 assert!(proceeds >= min_proceeds, "Proceeds below minimum");
 
@@ -243,8 +300,9 @@ impl Contract for MarketContract {
                 };
 
                 let total_pool = market.yes_pool.saturating_add(market.no_pool);
-                let payout_value = u128::from(winning_shares) * u128::from(total_pool) / u128::from(total_winning_shares);
-                let payout = Amount::from_attos(payout_value);
+                let payout = Amount::from_attos(
+                    safe_mul_div(u128::from(winning_shares), u128::from(total_pool), u128::from(total_winning_shares))
+                );
 
                 position.claimed = true;
                 self.state.positions.insert(&position_key, position)
