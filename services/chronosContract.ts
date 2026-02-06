@@ -9,8 +9,8 @@
  */
 
 // Configuration from environment
-export const APPLICATION_ID = import.meta.env.VITE_LINERA_APP_ID || 'bc2b46b61303d6282564fd3a3bd96aa4ad77a06625d04c7c9c3a7f71a5a286fa';
-export const CHAIN_ID = import.meta.env.VITE_LINERA_CHAIN_ID || '39ca58e87891a5f5dc3eb77aab64a3cd3bebc9ca0ea25cdc3899e0a9b1549c55';
+export const APPLICATION_ID = import.meta.env.VITE_LINERA_APP_ID || 'a924ed41ae197c46ff7b7aa5133c6118e5ac5c7e1c401401a3d8e2c3b3254bb9';
+export const CHAIN_ID = import.meta.env.VITE_LINERA_CHAIN_ID || '772ef34c94ba510d3d42a99aaaa6bba06361f8b9638331caa8ffb2db54c5b66c';
 export const NODE_URL = import.meta.env.VITE_LINERA_NODE_URL || 'http://localhost:8080';
 
 // Application-specific GraphQL endpoint

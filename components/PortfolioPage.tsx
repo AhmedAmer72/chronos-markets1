@@ -238,7 +238,7 @@ const PortfolioPage: React.FC = () => {
                                             innerRadius={50}
                                             outerRadius={80}
                                             dataKey="value"
-                                            label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                                            label={(props: Record<string, unknown>) => `${props.name} ${(Number(props.percent) * 100).toFixed(0)}%`}
                                             labelLine={false}
                                         >
                                             {categoryData.map((entry, index) => (

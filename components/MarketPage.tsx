@@ -393,7 +393,7 @@ const MarketPage: React.FC = () => {
     const [orderBook, setOrderBook] = useState<{ bids: Order[]; asks: Order[] }>({ bids: [], asks: [] });
     const [trades, setTrades] = useState<Trade[]>([]);
     const [loading, setLoading] = useState(true);
-    const intervalRef = useRef<number>();
+    const intervalRef = useRef<number | undefined>(undefined);
 
     const fetchData = useCallback(async () => {
         if (!id) return;

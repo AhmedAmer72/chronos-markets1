@@ -171,8 +171,12 @@ export async function initializeLinera(useTestnet: boolean = true): Promise<{
     // Dynamic import of Linera client
     const linera = await import('@linera/client');
     
-    // Initialize the WebAssembly module
-    await linera.default();
+    // Initialize the WebAssembly module (if init export exists)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const initFn = (linera as any).default;
+    if (typeof initFn === 'function') {
+      await initFn();
+    }
     
     // Create or load wallet from faucet
     const faucetUrl = useTestnet ? LINERA_CONFIG.FAUCET_URL : LINERA_CONFIG.LOCAL_NODE_URL;
@@ -190,7 +194,7 @@ export async function initializeLinera(useTestnet: boolean = true): Promise<{
     }
     
     // Create the client with wallet, signer, and skip_process_inbox=false
-    lineraClient = new linera.Client(wallet, signer, false) as unknown as LineraClient;
+    lineraClient = new linera.Client(wallet, signer, { skipProcessInbox: false } as never) as unknown as LineraClient;
     
     // Get owner address from signer (for claiming chain)
     let ownerAddress: string;
