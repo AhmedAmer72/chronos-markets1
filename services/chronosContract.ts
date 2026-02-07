@@ -9,7 +9,7 @@
  */
 
 // Configuration from environment
-export const APPLICATION_ID = import.meta.env.VITE_LINERA_APP_ID || 'bcbc5088f52e1b929f8440a61927a0ae5b4a30a93d972f6cf320e4438e16b26e';
+export const APPLICATION_ID = import.meta.env.VITE_LINERA_APP_ID || '936f7eb21254aa0df029f98d278c80b52de00b888f9bfb678c7d6b1db5969176';
 export const CHAIN_ID = import.meta.env.VITE_LINERA_CHAIN_ID || '772ef34c94ba510d3d42a99aaaa6bba06361f8b9638331caa8ffb2db54c5b66c';
 export const NODE_URL = import.meta.env.VITE_LINERA_NODE_URL || 'http://localhost:8080';
 

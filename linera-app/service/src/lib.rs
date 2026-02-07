@@ -1,73 +1,168 @@
-/*!
-Chronos Markets Service v2.0 - GraphQL Interface
-
-Following Linera-Mine pattern (NeoCrafts-cpu/Linera-Mine):
-- Arc<MarketState> for lazy on-demand state queries
-- QueryRoot with comprehensive query methods
-- Health check endpoint (hello)
-- Schema::build(QueryRoot, MutationRoot, EmptySubscription)
-*/
+// Copyright (c) Chronos Markets
+// Prediction Market Service (GraphQL API)
 
 #![cfg_attr(target_arch = "wasm32", no_main)]
 
-mod state;
-
 use std::sync::Arc;
 use async_graphql::{EmptySubscription, Object, Request, Response, Schema, SimpleObject};
-use chronos_market::{
-    MarketAbi, Operation, MarketState,
-    Market, Position, LimitOrder, OrderStatus, Combo, ComboStatus,
-    TradingAgent, FeedItem,
-};
 use linera_sdk::{
-    linera_base_types::{AccountOwner, Amount, WithServiceAbi},
-    views::View,
+    linera_base_types::{AccountOwner, Amount, Timestamp, WithServiceAbi},
+    views::{linera_views, MapView, RegisterView, RootView, View, ViewStorageContext},
     graphql::GraphQLMutationRoot as _,
     Service, ServiceRuntime,
 };
-
-// ============ SERVICE (Linera-Mine pattern) ============
-
-pub struct MarketService {
-    state: Arc<MarketState>,
-    runtime: Arc<ServiceRuntime<Self>>,
-}
+use serde::{Deserialize, Serialize};
+use chronos_market::{AgentStrategy, OrderSide, OrderDuration, FeedItemType, Operation};
 
 linera_sdk::service!(MarketService);
 
-impl WithServiceAbi for MarketService {
-    type Abi = MarketAbi;
+// ============ STATE STRUCTURES ============
+
+#[derive(RootView)]
+#[view(context = ViewStorageContext)]
+pub struct MarketState {
+    pub markets: MapView<u64, Market>,
+    pub positions: MapView<(AccountOwner, u64), Position>,
+    pub next_market_id: RegisterView<u64>,
+    pub total_volume: RegisterView<Amount>,
+    pub limit_orders: MapView<u64, LimitOrder>,
+    pub next_order_id: RegisterView<u64>,
+    pub order_book: MapView<(u64, bool), Vec<u64>>,  // Must match contract state layout
+    pub combos: MapView<u64, Combo>,
+    pub next_combo_id: RegisterView<u64>,
+    pub user_combos: MapView<AccountOwner, Vec<u64>>,  // Must match contract state layout
+    pub agents: MapView<u64, TradingAgent>,
+    pub next_agent_id: RegisterView<u64>,
+    pub agent_followers: MapView<(u64, AccountOwner), AgentFollower>,
+    pub feed_items: MapView<u64, FeedItem>,
+    pub next_feed_id: RegisterView<u64>,
+    pub user_followers: MapView<AccountOwner, Vec<AccountOwner>>,
+    pub user_following: MapView<AccountOwner, Vec<AccountOwner>>,
+    pub item_likes: MapView<u64, Vec<AccountOwner>>,  // Must match contract state layout
 }
 
-impl Service for MarketService {
-    type Parameters = ();
-
-    async fn new(runtime: ServiceRuntime<Self>) -> Self {
-        let state = MarketState::load(runtime.root_view_storage_context())
-            .await
-            .expect("Failed to load state");
-        MarketService {
-            state: Arc::new(state),
-            runtime: Arc::new(runtime),
-        }
-    }
-
-    async fn handle_query(&self, request: Request) -> Response {
-        let schema = Schema::build(
-            QueryRoot {
-                state: self.state.clone(),
-            },
-            Operation::mutation_root(self.runtime.clone()),
-            EmptySubscription,
-        )
-        .finish();
-        schema.execute(request).await
-    }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Market {
+    pub id: u64,
+    pub creator: AccountOwner,
+    pub question: String,
+    pub categories: Vec<String>,
+    pub end_time: Timestamp,
+    pub created_at: Timestamp,
+    pub yes_pool: Amount,
+    pub no_pool: Amount,
+    pub total_yes_shares: Amount,
+    pub total_no_shares: Amount,
+    pub resolved: bool,
+    pub outcome: Option<bool>,
+    pub volume: Amount,
 }
 
-// ============ GRAPHQL OUTPUT TYPES ============
-// Wrapper types to convert Amount/AccountOwner/Timestamp to strings
-// (async_graphql doesn't support i128 natively)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Position {
+    pub market_id: u64,
+    pub owner: AccountOwner,
+    pub yes_shares: Amount,
+    pub no_shares: Amount,
+    pub claimed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LimitOrder {
+    pub id: u64,
+    pub owner: AccountOwner,
+    pub market_id: u64,
+    pub is_yes: bool,
+    pub side: OrderSide,
+    pub price: Amount,
+    pub original_amount: Amount,
+    pub filled_amount: Amount,
+    pub duration: OrderDuration,
+    pub created_at: Timestamp,
+    pub status: OrderStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum OrderStatus {
+    Open,
+    PartiallyFilled,
+    Filled,
+    Cancelled,
+    Expired,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Combo {
+    pub id: u64,
+    pub owner: AccountOwner,
+    pub name: String,
+    pub legs: Vec<ComboLeg>,
+    pub stake: Amount,
+    pub potential_payout: Amount,
+    pub created_at: Timestamp,
+    pub status: ComboStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComboLeg {
+    pub market_id: u64,
+    pub prediction: bool,
+    pub odds: Amount,
+    pub resolved: bool,
+    pub won: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum ComboStatus {
+    Active,
+    Won,
+    Lost,
+    PartiallyResolved,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TradingAgent {
+    pub id: u64,
+    pub owner: AccountOwner,
+    pub name: String,
+    pub strategy: AgentStrategy,
+    pub config: String,
+    pub capital: Amount,
+    pub total_volume: Amount,
+    pub profit_loss: i128,
+    pub win_rate: u32,
+    pub total_trades: u64,
+    pub winning_trades: u64,
+    pub followers_count: u64,
+    pub is_active: bool,
+    pub created_at: Timestamp,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentFollower {
+    pub agent_id: u64,
+    pub follower: AccountOwner,
+    pub allocation: Amount,
+    pub copy_trades: bool,
+    pub started_at: Timestamp,
+    pub total_copied_pnl: i128,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeedItem {
+    pub id: u64,
+    pub author: AccountOwner,
+    pub item_type: FeedItemType,
+    pub market_id: Option<u64>,
+    pub content: String,
+    pub data: String,
+    pub likes_count: u64,
+    pub comments_count: u64,
+    pub created_at: Timestamp,
+}
+
+// ============ GRAPHQL TYPES ============
 
 #[derive(SimpleObject)]
 struct MarketInfo {
@@ -90,11 +185,13 @@ struct MarketInfo {
 
 impl From<Market> for MarketInfo {
     fn from(m: Market) -> Self {
-        let yes_pool_val = u128::from(m.yes_pool) as f64;
-        let no_pool_val = u128::from(m.no_pool) as f64;
+        let yes_pool_val: f64 = u128::from(m.yes_pool) as f64;
+        let no_pool_val: f64 = u128::from(m.no_pool) as f64;
         let total = yes_pool_val + no_pool_val;
+        
         let yes_price = if total > 0.0 { no_pool_val / total } else { 0.5 };
         let no_price = if total > 0.0 { yes_pool_val / total } else { 0.5 };
+        
         MarketInfo {
             id: m.id,
             creator: format!("{:?}", m.creator),
@@ -277,339 +374,213 @@ impl From<FeedItem> for FeedItemInfo {
     }
 }
 
-// ============ QUERY ROOT (Linera-Mine pattern: lazy Arc<State> queries) ============
+// ============ SERVICE ============
 
-struct QueryRoot {
+pub struct MarketService {
     state: Arc<MarketState>,
+    runtime: Arc<ServiceRuntime<Self>>,
 }
 
-// Private helpers (not GraphQL resolvers)
-impl QueryRoot {
-    async fn collect_feed_items(&self, limit: usize) -> Vec<FeedItemInfo> {
-        let next_id = *self.state.next_feed_id.get();
-        let start = if next_id > 100 { next_id - 100 } else { 0 };
-        let mut items = Vec::new();
-        for id in start..next_id {
-            if let Ok(Some(item)) = self.state.feed_items.get(&id).await {
-                items.push(FeedItemInfo::from(item));
-            }
-        }
-        items.reverse();
-        items.into_iter().take(limit).collect()
-    }
+impl WithServiceAbi for MarketService {
+    type Abi = chronos_market::MarketAbi;
 }
 
-#[Object]
-impl QueryRoot {
-    /// Health check - service status
-    async fn hello(&self) -> String {
-        "Chronos Markets v2.0 - Decentralized Prediction Market on Linera".to_string()
+impl Service for MarketService {
+    type Parameters = ();
+
+    async fn new(runtime: ServiceRuntime<Self>) -> Self {
+        let state = MarketState::load(runtime.root_view_storage_context())
+            .await
+            .expect("Failed to load state");
+        MarketService { 
+            state: Arc::new(state),
+            runtime: Arc::new(runtime),
+        }
     }
 
-    // ==================== MARKET QUERIES ====================
-
-    async fn total_volume(&self) -> String {
-        format!("{}", *self.state.total_volume.get())
-    }
-
-    async fn market_count(&self) -> u64 {
-        *self.state.next_market_id.get()
-    }
-
-    /// Get all markets
-    async fn markets(&self) -> Vec<MarketInfo> {
+    async fn handle_query(&self, request: Request) -> Response {
+        let total_volume = *self.state.total_volume.get();
+        let next_market_id = *self.state.next_market_id.get();
+        let next_order_id = *self.state.next_order_id.get();
+        let next_combo_id = *self.state.next_combo_id.get();
+        let next_agent_id = *self.state.next_agent_id.get();
+        let next_feed_id = *self.state.next_feed_id.get();
+        
+        // Collect all markets
         let mut markets = Vec::new();
-        let next_id = *self.state.next_market_id.get();
-        for id in 0..next_id.max(100) {
-            if let Ok(Some(m)) = self.state.markets.get(&id).await {
-                markets.push(MarketInfo::from(m));
+        for id in 0..next_market_id {
+            if let Ok(Some(market)) = self.state.markets.get(&id).await {
+                markets.push(MarketInfo::from(market));
             }
         }
-        markets
-    }
 
-    /// Get a specific market by ID
-    async fn market(&self, id: u64) -> Option<MarketInfo> {
-        match self.state.markets.get(&id).await {
-            Ok(Some(m)) => Some(MarketInfo::from(m)),
-            _ => None,
-        }
-    }
-
-    /// Get active (non-resolved) markets
-    async fn active_markets(&self) -> Vec<MarketInfo> {
-        let mut markets = Vec::new();
-        let next_id = *self.state.next_market_id.get();
-        for id in 0..next_id.max(100) {
-            if let Ok(Some(m)) = self.state.markets.get(&id).await {
-                if !m.resolved {
-                    markets.push(MarketInfo::from(m));
-                }
-            }
-        }
-        markets
-    }
-
-    /// Get resolved markets
-    async fn resolved_markets(&self) -> Vec<MarketInfo> {
-        let mut markets = Vec::new();
-        let next_id = *self.state.next_market_id.get();
-        for id in 0..next_id.max(100) {
-            if let Ok(Some(m)) = self.state.markets.get(&id).await {
-                if m.resolved {
-                    markets.push(MarketInfo::from(m));
-                }
-            }
-        }
-        markets
-    }
-
-    /// Get markets by category
-    async fn markets_by_category(&self, category: String) -> Vec<MarketInfo> {
-        let mut markets = Vec::new();
-        let next_id = *self.state.next_market_id.get();
-        for id in 0..next_id.max(100) {
-            if let Ok(Some(m)) = self.state.markets.get(&id).await {
-                if m.categories.contains(&category) {
-                    markets.push(MarketInfo::from(m));
-                }
-            }
-        }
-        markets
-    }
-
-    // ==================== POSITION QUERIES ====================
-
-    /// Get all positions for a wallet address
-    async fn positions(&self, wallet: String) -> Vec<PositionInfo> {
-        let mut positions = Vec::new();
-        let mut keys = Vec::new();
-        let _ = self.state.positions.for_each_index(|key| {
-            keys.push(key.clone());
-            Ok(())
-        }).await;
-
-        for key in keys {
-            let owner_str = format!("{:?}", key.0);
-            if owner_str.contains(&wallet) || wallet.contains(&owner_str) {
-                if let Ok(Some(pos)) = self.state.positions.get(&key).await {
-                    positions.push(PositionInfo::from(pos));
-                }
-            }
-        }
-        positions
-    }
-
-    /// Get position for a specific wallet and market
-    async fn position(&self, wallet: String, market_id: u64) -> Option<PositionInfo> {
-        let mut keys = Vec::new();
-        let _ = self.state.positions.for_each_index(|key| {
-            if key.1 == market_id {
-                keys.push(key.clone());
-            }
-            Ok(())
-        }).await;
-
-        for key in keys {
-            let owner_str = format!("{:?}", key.0);
-            if owner_str.contains(&wallet) || wallet.contains(&owner_str) {
-                if let Ok(Some(pos)) = self.state.positions.get(&key).await {
-                    return Some(PositionInfo::from(pos));
-                }
-            }
-        }
-        None
-    }
-
-    // ==================== LIMIT ORDER QUERIES ====================
-
-    /// Get all limit orders
-    async fn limit_orders(&self) -> Vec<LimitOrderInfo> {
+        // Collect all limit orders
         let mut orders = Vec::new();
-        let next_id = *self.state.next_order_id.get();
-        for id in 0..next_id.max(100) {
+        for id in 0..next_order_id {
             if let Ok(Some(order)) = self.state.limit_orders.get(&id).await {
                 orders.push(LimitOrderInfo::from(order));
             }
         }
-        orders
-    }
 
-    /// Get a specific limit order by ID
-    async fn limit_order(&self, id: u64) -> Option<LimitOrderInfo> {
-        match self.state.limit_orders.get(&id).await {
-            Ok(Some(o)) => Some(LimitOrderInfo::from(o)),
-            _ => None,
-        }
-    }
-
-    /// Get orders for a specific market
-    async fn orders_by_market(&self, market_id: u64) -> Vec<LimitOrderInfo> {
-        let mut orders = Vec::new();
-        let next_id = *self.state.next_order_id.get();
-        for id in 0..next_id.max(100) {
-            if let Ok(Some(order)) = self.state.limit_orders.get(&id).await {
-                if order.market_id == market_id && order.status == OrderStatus::Open {
-                    orders.push(LimitOrderInfo::from(order));
-                }
-            }
-        }
-        orders
-    }
-
-    /// Get all open orders
-    async fn open_orders(&self) -> Vec<LimitOrderInfo> {
-        let mut orders = Vec::new();
-        let next_id = *self.state.next_order_id.get();
-        for id in 0..next_id.max(100) {
-            if let Ok(Some(order)) = self.state.limit_orders.get(&id).await {
-                if order.status == OrderStatus::Open || order.status == OrderStatus::PartiallyFilled {
-                    orders.push(LimitOrderInfo::from(order));
-                }
-            }
-        }
-        orders
-    }
-
-    // ==================== COMBO QUERIES ====================
-
-    /// Get all combos
-    async fn combos(&self) -> Vec<ComboInfo> {
+        // Collect all combos
         let mut combos = Vec::new();
-        let next_id = *self.state.next_combo_id.get();
-        for id in 0..next_id.max(100) {
+        for id in 0..next_combo_id {
             if let Ok(Some(combo)) = self.state.combos.get(&id).await {
                 combos.push(ComboInfo::from(combo));
             }
         }
-        combos
-    }
 
-    /// Get a specific combo by ID
-    async fn combo(&self, id: u64) -> Option<ComboInfo> {
-        match self.state.combos.get(&id).await {
-            Ok(Some(c)) => Some(ComboInfo::from(c)),
-            _ => None,
-        }
-    }
-
-    /// Get active combos
-    async fn active_combos(&self) -> Vec<ComboInfo> {
-        let mut combos = Vec::new();
-        let next_id = *self.state.next_combo_id.get();
-        for id in 0..next_id.max(100) {
-            if let Ok(Some(combo)) = self.state.combos.get(&id).await {
-                if combo.status == ComboStatus::Active || combo.status == ComboStatus::PartiallyResolved {
-                    combos.push(ComboInfo::from(combo));
-                }
-            }
-        }
-        combos
-    }
-
-    // ==================== AGENT QUERIES ====================
-
-    /// Get all trading agents
-    async fn agents(&self) -> Vec<AgentInfo> {
+        // Collect all agents
         let mut agents = Vec::new();
-        let next_id = *self.state.next_agent_id.get();
-        for id in 0..next_id.max(100) {
+        for id in 0..next_agent_id {
             if let Ok(Some(agent)) = self.state.agents.get(&id).await {
                 agents.push(AgentInfo::from(agent));
             }
         }
-        agents
-    }
 
-    /// Get a specific agent by ID
-    async fn agent(&self, id: u64) -> Option<AgentInfo> {
-        match self.state.agents.get(&id).await {
-            Ok(Some(a)) => Some(AgentInfo::from(a)),
-            _ => None,
-        }
-    }
-
-    /// Get active agents
-    async fn active_agents(&self) -> Vec<AgentInfo> {
-        let mut agents = Vec::new();
-        let next_id = *self.state.next_agent_id.get();
-        for id in 0..next_id.max(100) {
-            if let Ok(Some(agent)) = self.state.agents.get(&id).await {
-                if agent.is_active {
-                    agents.push(AgentInfo::from(agent));
-                }
+        // Collect recent feed items (last 100)
+        let mut feed_items = Vec::new();
+        let start = if next_feed_id > 100 { next_feed_id - 100 } else { 0 };
+        for id in start..next_feed_id {
+            if let Ok(Some(item)) = self.state.feed_items.get(&id).await {
+                feed_items.push(FeedItemInfo::from(item));
             }
         }
-        agents
+        feed_items.reverse(); // Most recent first
+        
+        let schema = Schema::build(
+            QueryRoot { 
+                total_volume,
+                market_count: next_market_id,
+                markets,
+                orders,
+                combos,
+                agents,
+                feed_items,
+            },
+            Operation::mutation_root(self.runtime.clone()),
+            EmptySubscription,
+        )
+        .finish();
+        schema.execute(request).await
+    }
+}
+
+struct QueryRoot {
+    total_volume: Amount,
+    market_count: u64,
+    markets: Vec<MarketInfo>,
+    orders: Vec<LimitOrderInfo>,
+    combos: Vec<ComboInfo>,
+    agents: Vec<AgentInfo>,
+    feed_items: Vec<FeedItemInfo>,
+}
+
+#[Object]
+impl QueryRoot {
+    // === Market Queries ===
+    
+    async fn total_volume(&self) -> String {
+        format!("{}", self.total_volume)
+    }
+    
+    async fn market_count(&self) -> u64 {
+        self.market_count
+    }
+    
+    async fn markets(&self) -> &Vec<MarketInfo> {
+        &self.markets
+    }
+    
+    async fn market(&self, id: u64) -> Option<&MarketInfo> {
+        self.markets.iter().find(|m| m.id == id)
+    }
+    
+    async fn active_markets(&self) -> Vec<&MarketInfo> {
+        self.markets.iter().filter(|m| !m.resolved).collect()
+    }
+    
+    async fn resolved_markets(&self) -> Vec<&MarketInfo> {
+        self.markets.iter().filter(|m| m.resolved).collect()
     }
 
-    /// Get top agents by profit/loss
-    async fn top_agents(&self, limit: Option<i32>) -> Vec<AgentInfo> {
+    async fn markets_by_category(&self, category: String) -> Vec<&MarketInfo> {
+        self.markets.iter().filter(|m| m.categories.contains(&category)).collect()
+    }
+
+    // === Limit Order Queries ===
+    
+    async fn limit_orders(&self) -> &Vec<LimitOrderInfo> {
+        &self.orders
+    }
+
+    async fn limit_order(&self, id: u64) -> Option<&LimitOrderInfo> {
+        self.orders.iter().find(|o| o.id == id)
+    }
+
+    async fn orders_by_market(&self, market_id: u64) -> Vec<&LimitOrderInfo> {
+        self.orders.iter().filter(|o| o.market_id == market_id && o.status == "Open").collect()
+    }
+
+    async fn open_orders(&self) -> Vec<&LimitOrderInfo> {
+        self.orders.iter().filter(|o| o.status == "Open" || o.status == "PartiallyFilled").collect()
+    }
+
+    // === Combo Queries ===
+    
+    async fn combos(&self) -> &Vec<ComboInfo> {
+        &self.combos
+    }
+
+    async fn combo(&self, id: u64) -> Option<&ComboInfo> {
+        self.combos.iter().find(|c| c.id == id)
+    }
+
+    async fn active_combos(&self) -> Vec<&ComboInfo> {
+        self.combos.iter().filter(|c| c.status == "Active" || c.status == "PartiallyResolved").collect()
+    }
+
+    // === Agent Queries ===
+    
+    async fn agents(&self) -> &Vec<AgentInfo> {
+        &self.agents
+    }
+
+    async fn agent(&self, id: u64) -> Option<&AgentInfo> {
+        self.agents.iter().find(|a| a.id == id)
+    }
+
+    async fn active_agents(&self) -> Vec<&AgentInfo> {
+        self.agents.iter().filter(|a| a.is_active).collect()
+    }
+
+    async fn top_agents(&self, limit: Option<i32>) -> Vec<&AgentInfo> {
         let limit = limit.unwrap_or(10) as usize;
-        let mut agents = Vec::new();
-        let next_id = *self.state.next_agent_id.get();
-        for id in 0..next_id.max(100) {
-            if let Ok(Some(agent)) = self.state.agents.get(&id).await {
-                agents.push(AgentInfo::from(agent));
-            }
-        }
-        agents.sort_by(|a, b| {
+        let mut sorted: Vec<_> = self.agents.iter().collect();
+        sorted.sort_by(|a, b| {
             let a_pnl: i128 = a.profit_loss.parse().unwrap_or(0);
             let b_pnl: i128 = b.profit_loss.parse().unwrap_or(0);
             b_pnl.cmp(&a_pnl)
         });
-        agents.into_iter().take(limit).collect()
+        sorted.into_iter().take(limit).collect()
     }
 
-    // ==================== SOCIAL FEED QUERIES ====================
-
-    /// Get recent feed items
-    async fn feed(&self, limit: Option<i32>) -> Vec<FeedItemInfo> {
-        self.collect_feed_items(limit.unwrap_or(50) as usize).await
+    // === Social Feed Queries ===
+    
+    async fn feed(&self, limit: Option<i32>) -> Vec<&FeedItemInfo> {
+        let limit = limit.unwrap_or(50) as usize;
+        self.feed_items.iter().take(limit).collect()
     }
 
-    /// Alias for feed() - matches frontend socialFeed query
-    async fn social_feed(&self, limit: Option<i32>) -> Vec<FeedItemInfo> {
-        self.collect_feed_items(limit.unwrap_or(50) as usize).await
+    async fn feed_item(&self, id: u64) -> Option<&FeedItemInfo> {
+        self.feed_items.iter().find(|f| f.id == id)
     }
 
-    /// Get a specific feed item by ID
-    async fn feed_item(&self, id: u64) -> Option<FeedItemInfo> {
-        match self.state.feed_items.get(&id).await {
-            Ok(Some(f)) => Some(FeedItemInfo::from(f)),
-            _ => None,
-        }
+    async fn feed_by_market(&self, market_id: u64) -> Vec<&FeedItemInfo> {
+        self.feed_items.iter().filter(|f| f.market_id == Some(market_id)).collect()
     }
 
-    /// Get feed items for a specific market
-    async fn feed_by_market(&self, market_id: u64) -> Vec<FeedItemInfo> {
-        let mut items = Vec::new();
-        let next_id = *self.state.next_feed_id.get();
-        let start = if next_id > 100 { next_id - 100 } else { 0 };
-        for id in start..next_id {
-            if let Ok(Some(item)) = self.state.feed_items.get(&id).await {
-                if item.market_id == Some(market_id) {
-                    items.push(FeedItemInfo::from(item));
-                }
-            }
-        }
-        items.reverse();
-        items
-    }
-
-    /// Get feed items by type
-    async fn feed_by_type(&self, item_type: String) -> Vec<FeedItemInfo> {
-        let mut items = Vec::new();
-        let next_id = *self.state.next_feed_id.get();
-        let start = if next_id > 100 { next_id - 100 } else { 0 };
-        for id in start..next_id {
-            if let Ok(Some(item)) = self.state.feed_items.get(&id).await {
-                if format!("{:?}", item.item_type) == item_type {
-                    items.push(FeedItemInfo::from(item));
-                }
-            }
-        }
-        items.reverse();
-        items
+    async fn feed_by_type(&self, item_type: String) -> Vec<&FeedItemInfo> {
+        self.feed_items.iter().filter(|f| f.item_type == item_type).collect()
     }
 }
