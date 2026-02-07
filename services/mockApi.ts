@@ -26,6 +26,8 @@ const mockMarkets: Market[] = [
         oracleSource: 'Chainlink',
         resolutionDetails: 'The resolution will be based on the official announcement from the U.S. Securities and Exchange Commission (SEC). Approval is defined as the SEC issuing an order granting accelerated approval.',
         priceHistory: generatePriceHistory(0.55, 7),
+        yesPool: 500,
+        noPool: 500,
     },
     {
         id: '2',
@@ -39,6 +41,8 @@ const mockMarkets: Market[] = [
         oracleSource: 'UMA',
         resolutionDetails: 'Resolution will be based on the Federal Open Market Committee (FOMC) statement following their next scheduled meeting. A "hike" is any increase to the target range for the federal funds rate.',
         priceHistory: generatePriceHistory(0.25, 7),
+        yesPool: 500,
+        noPool: 500,
     },
     {
         id: '3',
@@ -52,6 +56,8 @@ const mockMarkets: Market[] = [
         oracleSource: 'Project-Specific Oracle',
         resolutionDetails: 'Commercially available is defined as a service where any member of the public can hail a fully autonomous ride without a safety driver. The 5 cities must be within the top 20 most populous US cities.',
         priceHistory: generatePriceHistory(0.40, 7),
+        yesPool: 500,
+        noPool: 500,
     },
     {
         id: '4',
@@ -65,6 +71,8 @@ const mockMarkets: Market[] = [
         oracleSource: 'Official Artist Announcements',
         resolutionDetails: 'Resolution is based on an official announcement from Taylor Swift or her official representatives on social media or through a press release.',
         priceHistory: generatePriceHistory(0.70, 7),
+        yesPool: 500,
+        noPool: 500,
     },
     {
         id: '5',
@@ -78,6 +86,8 @@ const mockMarkets: Market[] = [
         oracleSource: 'CoinGecko',
         resolutionDetails: 'Resolution based on Bitcoin price reaching $100,000 USD on CoinGecko.',
         priceHistory: generatePriceHistory(0.30, 7),
+        yesPool: 500,
+        noPool: 500,
     },
     {
         id: '6',
@@ -91,6 +101,8 @@ const mockMarkets: Market[] = [
         oracleSource: 'Associated Press',
         resolutionDetails: 'Resolution based on Associated Press election call.',
         priceHistory: generatePriceHistory(0.48, 7),
+        yesPool: 500,
+        noPool: 500,
     },
     {
         id: '7',
@@ -104,6 +116,8 @@ const mockMarkets: Market[] = [
         oracleSource: 'NBA Official',
         resolutionDetails: 'Resolution based on official NBA playoff standings.',
         priceHistory: generatePriceHistory(0.65, 7),
+        yesPool: 500,
+        noPool: 500,
     },
     {
         id: '8',
@@ -117,6 +131,8 @@ const mockMarkets: Market[] = [
         oracleSource: 'OpenAI Official',
         resolutionDetails: 'Resolution based on official OpenAI announcement.',
         priceHistory: generatePriceHistory(0.35, 7),
+        yesPool: 500,
+        noPool: 500,
     },
     {
         id: '9',
@@ -130,6 +146,8 @@ const mockMarkets: Market[] = [
         oracleSource: 'Yahoo Finance',
         resolutionDetails: 'Resolution based on Netflix closing price on Yahoo Finance.',
         priceHistory: generatePriceHistory(0.38, 7),
+        yesPool: 500,
+        noPool: 500,
     },
     {
         id: '10',
@@ -143,6 +161,8 @@ const mockMarkets: Market[] = [
         oracleSource: 'SEC Filings',
         resolutionDetails: 'Resolution based on official SEC filings or Tesla press releases.',
         priceHistory: generatePriceHistory(0.22, 7),
+        yesPool: 500,
+        noPool: 500,
     },
 ];
 

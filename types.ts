@@ -11,6 +11,9 @@ export interface Market {
     oracleSource: string;
     resolutionDetails: string;
     priceHistory: { time: number; value: number }[];
+    /** AMM pool values (token units) for client-side cost calculations */
+    yesPool: number;
+    noPool: number;
 }
 
 export enum OrderType {

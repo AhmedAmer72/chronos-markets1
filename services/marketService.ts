@@ -55,13 +55,15 @@ function generatePriceHistory(currentPrice: number, days: number = 7): { time: n
  */
 function convertMarket(m: BlockchainMarket): Market {
   const yesPrice = m.yesPrice || 0.5;
+  const yesPool = parseFloat(m.yesPool || '0');
+  const noPool = parseFloat(m.noPool || '0');
   return {
     id: String(m.id),
     question: m.question,
     categories: m.categories || ['General'],
     currentPrice: yesPrice,
     volume: parseInt(m.volume || '0'),
-    liquidity: parseInt(m.yesPool || '0') + parseInt(m.noPool || '0'),
+    liquidity: Math.round(yesPool + noPool),
     traders: 0, // Not tracked on chain
     ends: new Date(m.endTime).getTime(),
     oracleSource: 'Linera Oracle',
@@ -69,6 +71,8 @@ function convertMarket(m: BlockchainMarket): Market {
       ? `Market resolved: ${m.outcome ? 'YES' : 'NO'}` 
       : 'Pending resolution by market creator',
     priceHistory: generatePriceHistory(yesPrice),
+    yesPool,
+    noPool,
   };
 }
 

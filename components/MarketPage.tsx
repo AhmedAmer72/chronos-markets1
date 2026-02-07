@@ -59,7 +59,35 @@ const MarketChart: React.FC<{ data: { time: number, value: number }[] }> = ({ da
     );
 };
 
-const TradeWidget: React.FC<{ marketId?: string }> = ({ marketId }) => {
+const SLIPPAGE_TOLERANCE = 0.10; // 10% slippage tolerance
+
+/**
+ * Calculate AMM cost for buying shares.
+ * cost = poolIn * shares / (poolOut - shares)
+ * For buying YES: poolIn = noPool, poolOut = yesPool
+ * For buying NO:  poolIn = yesPool, poolOut = noPool
+ */
+function calcBuyCost(yesPool: number, noPool: number, shares: number, isYes: boolean): number | null {
+    const poolIn = isYes ? noPool : yesPool;
+    const poolOut = isYes ? yesPool : noPool;
+    if (shares <= 0 || shares >= poolOut) return null; // invalid or exceeds liquidity
+    return (poolIn * shares) / (poolOut - shares);
+}
+
+/**
+ * Calculate AMM proceeds for selling shares.
+ * proceeds = poolOut * shares / (poolIn + shares)
+ * For selling YES: poolIn = yesPool, poolOut = noPool
+ * For selling NO:  poolIn = noPool, poolOut = yesPool
+ */
+function calcSellProceeds(yesPool: number, noPool: number, shares: number, isYes: boolean): number | null {
+    const poolIn = isYes ? yesPool : noPool;
+    const poolOut = isYes ? noPool : yesPool;
+    if (shares <= 0 || poolIn + shares <= 0) return null;
+    return (poolOut * shares) / (poolIn + shares);
+}
+
+const TradeWidget: React.FC<{ marketId?: string; market?: Market | null }> = ({ marketId, market }) => {
     const { wallet } = useWallet();
     const [tradeMode, setTradeMode] = useState<'market' | 'limit'>('market');
     const [orderType, setOrderType] = useState<OrderType>(OrderType.BUY);
@@ -74,12 +102,31 @@ const TradeWidget: React.FC<{ marketId?: string }> = ({ marketId }) => {
     const [error, setError] = useState<string | null>(null);
     const [success, setSuccess] = useState<string | null>(null);
 
-    const cost = (parseFloat(amount) || 0) * (parseFloat(price) || 0);
-    const payout = (parseFloat(amount) || 0) * 1;
     const isYes = shareType === ShareType.YES;
+    const sharesNum = parseFloat(amount) || 0;
+    const yesPool = market?.yesPool || 0;
+    const noPool = market?.noPool || 0;
+
+    // Compute real AMM cost/proceeds
+    const ammCost = orderType === OrderType.BUY
+        ? calcBuyCost(yesPool, noPool, sharesNum, isYes)
+        : calcSellProceeds(yesPool, noPool, sharesNum, isYes);
+
+    const estimatedCost = ammCost ?? 0;
+    const avgPrice = sharesNum > 0 && ammCost != null ? ammCost / sharesNum : 0;
+    const maxPool = isYes ? yesPool : noPool;
+    const poolWarning = orderType === OrderType.BUY && sharesNum > 0 && sharesNum >= maxPool;
+    const payout = sharesNum; // Shares pay 1:1 if market resolves in your favor
+
+    // Update price display from market data
+    useEffect(() => {
+        if (market) {
+            setPrice(isYes ? market.currentPrice.toFixed(4) : (1 - market.currentPrice).toFixed(4));
+        }
+    }, [market, isYes]);
 
     const handlePlaceOrder = async () => {
-        if (!amount || !price) return;
+        if (!amount || sharesNum <= 0) return;
         if (!wallet.isConnected) {
             setError('Please connect your wallet first');
             return;
@@ -92,6 +139,14 @@ const TradeWidget: React.FC<{ marketId?: string }> = ({ marketId }) => {
             setError('Market ID not found');
             return;
         }
+        if (orderType === OrderType.BUY && poolWarning) {
+            setError(`Cannot buy ${sharesNum} shares — exceeds pool liquidity (${maxPool.toFixed(2)} available)`);
+            return;
+        }
+        if (ammCost == null || ammCost <= 0) {
+            setError('Unable to calculate trade cost. Check your amount.');
+            return;
+        }
 
         setIsSubmitting(true);
         setError(null);
@@ -99,31 +154,35 @@ const TradeWidget: React.FC<{ marketId?: string }> = ({ marketId }) => {
 
         try {
             if (orderType === OrderType.BUY) {
-                console.log('💰 Buying shares:', { marketId, isYes, amount, maxCost: cost.toString() });
+                // Use AMM-calculated cost + slippage tolerance as maxCost
+                const maxCost = estimatedCost * (1 + SLIPPAGE_TOLERANCE);
+                console.log('💰 Buying shares:', { marketId, isYes, shares: amount, estimatedCost: estimatedCost.toFixed(6), maxCost: maxCost.toFixed(6) });
                 const result = await buyShares({
                     marketId,
                     isYes,
                     shares: amount,
-                    maxCost: cost.toFixed(6),
+                    maxCost: maxCost.toFixed(6),
                 });
                 
                 if (result.success) {
-                    setSuccess(`✅ Successfully bought ${result.shares || amount} ${isYes ? 'YES' : 'NO'} shares!`);
+                    setSuccess(`✅ Bought ${result.shares || amount} ${isYes ? 'YES' : 'NO'} shares for ~${estimatedCost.toFixed(4)}!`);
                     setAmount('');
                 } else {
                     throw new Error(result.error || 'Failed to buy shares');
                 }
             } else {
-                console.log('💸 Selling shares:', { marketId, isYes, amount, minReturn: (cost * 0.95).toString() });
+                // For sell, use AMM-calculated proceeds with slippage as minReturn
+                const minReturn = estimatedCost * (1 - SLIPPAGE_TOLERANCE);
+                console.log('💸 Selling shares:', { marketId, isYes, shares: amount, estimatedProceeds: estimatedCost.toFixed(6), minReturn: minReturn.toFixed(6) });
                 const result = await sellShares({
                     marketId,
                     isYes,
                     shares: amount,
-                    minReturn: (cost * 0.95).toFixed(6),
+                    minReturn: minReturn.toFixed(6),
                 });
                 
                 if (result.success) {
-                    setSuccess(`✅ Successfully sold ${amount} ${isYes ? 'YES' : 'NO'} shares for ${result.returnAmount || cost.toFixed(2)}!`);
+                    setSuccess(`✅ Sold ${amount} ${isYes ? 'YES' : 'NO'} shares for ~${estimatedCost.toFixed(4)}!`);
                     setAmount('');
                 } else {
                     throw new Error(result.error || 'Failed to sell shares');
@@ -229,8 +288,21 @@ const TradeWidget: React.FC<{ marketId?: string }> = ({ marketId }) => {
             </div>
 
             <div className="mt-4 text-xs space-y-2 text-brand-secondary">
-                <div className="flex justify-between"><span>Cost:</span> <span className="font-mono text-brand-text">${cost.toFixed(2)}</span></div>
-                <div className="flex justify-between"><span>Potential Payout:</span> <span className="font-mono text-brand-text">${payout.toFixed(2)}</span></div>
+                <div className="flex justify-between"><span>Avg Price:</span> <span className="font-mono text-brand-text">{avgPrice > 0 ? avgPrice.toFixed(4) : '—'}</span></div>
+                <div className="flex justify-between">
+                    <span>{orderType === OrderType.BUY ? 'Est. Cost:' : 'Est. Proceeds:'}</span>
+                    <span className="font-mono text-brand-text">{estimatedCost > 0 ? estimatedCost.toFixed(4) : '—'}</span>
+                </div>
+                {orderType === OrderType.BUY && (
+                    <div className="flex justify-between"><span>Max Cost (incl. {SLIPPAGE_TOLERANCE * 100}% slippage):</span> <span className="font-mono text-brand-text">{estimatedCost > 0 ? (estimatedCost * (1 + SLIPPAGE_TOLERANCE)).toFixed(4) : '—'}</span></div>
+                )}
+                <div className="flex justify-between"><span>Potential Payout (if correct):</span> <span className="font-mono text-brand-text">{payout > 0 ? payout.toFixed(4) : '—'}</span></div>
+                {avgPrice > 0 && sharesNum > 0 && parseFloat(price) > 0 && Math.abs(avgPrice - parseFloat(price)) / parseFloat(price) > 0.05 && (
+                    <div className="text-yellow-400 text-[10px] mt-1">⚠️ Price impact: {((avgPrice / parseFloat(price) - 1) * 100).toFixed(1)}% above spot price due to trade size</div>
+                )}
+                {poolWarning && (
+                    <div className="text-red-400 text-[10px] mt-1">🚫 Shares exceed available pool ({maxPool.toFixed(2)} max)</div>
+                )}
             </div>
 
             {/* Error/Success Messages */}
@@ -458,7 +530,7 @@ const MarketPage: React.FC = () => {
                     </div>
                 </div>
                 <div className="space-y-4 animate-fadeIn" style={{ animationDelay: '300ms' }}>
-                    <TradeWidget marketId={id} />
+                    <TradeWidget marketId={id} market={market} />
                      <div className="bg-brand-surface border border-brand-border rounded-lg p-4">
                         <h3 className="font-semibold text-brand-text mb-2">Your Positions</h3>
                         <p className="text-sm text-brand-secondary">Connect wallet to view your positions in this market.</p>
