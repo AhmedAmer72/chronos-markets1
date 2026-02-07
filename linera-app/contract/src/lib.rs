@@ -1,11 +1,11 @@
 // Copyright (c) Chronos Markets
-// Prediction Market Contract
+// Prediction Market Contract — v2.0 with proper error handling (no panics)
 
 #![cfg_attr(target_arch = "wasm32", no_main)]
 
 pub mod state;
 
-use chronos_market::{MarketAbi, Operation, OperationResponse, OrderSide, OrderDuration, FeedItemType};
+use chronos_market::{MarketAbi, Operation, FeedItemType};
 use linera_sdk::{
     linera_base_types::{Amount, WithContractAbi, AccountOwner},
     views::{RootView, View},
@@ -15,38 +15,30 @@ use linera_sdk::{
 use self::state::{MarketState, OrderStatus, ComboStatus, ComboLegState};
 
 /// Safely compute (a * b) / c without u128 overflow.
-///
-/// Uses algebraic decomposition: a*b/c = (a/c)*b + (a%c)*b/c
-/// This avoids the intermediate a*b product that can exceed u128::MAX
-/// when both a and b are large Linera Amount values in attos (10^18 scale).
-fn safe_mul_div(a: u128, b: u128, c: u128) -> u128 {
-    assert!(c > 0, "Division by zero");
+fn safe_mul_div(a: u128, b: u128, c: u128) -> Result<u128, String> {
+    if c == 0 {
+        return Err("Division by zero in AMM calculation".to_string());
+    }
 
     // Fast path: if a * b fits in u128, do it directly
     if let Some(product) = a.checked_mul(b) {
-        return product / c;
+        return Ok(product / c);
     }
 
     // Overflow path: decompose to avoid overflow
-    // a * b / c = (a / c) * b + (a % c) * b / c
     let quotient = a / c;
     let remainder = a % c;
 
-    // (a / c) * b — should fit since a/c is small for AMM values
-    let term1 = quotient.checked_mul(b).expect("AMM result overflow");
+    let term1 = quotient.checked_mul(b)
+        .ok_or_else(|| format!("AMM overflow: quotient={} * b={}", quotient, b))?;
 
-    // (a % c) * b / c — remainder < c, so (a%c)*b/c < b
     let term2 = match remainder.checked_mul(b) {
         Some(rem_product) => rem_product / c,
         None => {
-            // Even the remainder product overflows — use further decomposition
-            // Split b: b = (b/c)*c + (b%c)
-            // remainder * b / c = remainder * (b/c) + remainder * (b%c) / c
             let b_div_c = b / c;
             let b_mod_c = b % c;
             let sub1 = remainder.checked_mul(b_div_c).unwrap_or_else(|| {
-                // Last resort: scale both down
-                let scale = 1_000_000_000u128; // 10^9
+                let scale = 1_000_000_000u128;
                 (remainder / scale) * (b_div_c / scale) * scale
             });
             let sub2 = match remainder.checked_mul(b_mod_c) {
@@ -60,7 +52,7 @@ fn safe_mul_div(a: u128, b: u128, c: u128) -> u128 {
         }
     };
 
-    term1 + term2
+    Ok(term1 + term2)
 }
 
 linera_sdk::contract!(MarketContract);
@@ -97,11 +89,33 @@ impl Contract for MarketContract {
         self.state.total_volume.set(Amount::ZERO);
     }
 
+    /// Execute an operation. Returns a String response.
+    /// On success: a descriptive result string.
+    /// On error: a string starting with "ERROR:" describing the failure.
+    /// This function NEVER panics — all errors are caught and returned as strings.
     async fn execute_operation(&mut self, operation: Self::Operation) -> Self::Response {
+        match self.execute_operation_inner(operation).await {
+            Ok(response) => response,
+            Err(e) => format!("ERROR: {}", e),
+        }
+    }
+
+    async fn execute_message(&mut self, _message: ()) {
+        // Messages not supported
+    }
+
+    async fn store(mut self) {
+        self.state.save().await.expect("Failed to save state");
+    }
+}
+
+impl MarketContract {
+    /// Inner implementation that uses Result for clean error propagation.
+    async fn execute_operation_inner(&mut self, operation: Operation) -> Result<String, String> {
         let timestamp = self.runtime.system_time();
         let caller = self.runtime
             .authenticated_signer()
-            .expect("Operation must be authenticated");
+            .ok_or_else(|| "Operation must be authenticated — no signer found".to_string())?;
 
         match operation {
             // === MARKET OPERATIONS ===
@@ -114,7 +128,11 @@ impl Contract for MarketContract {
                 let market_id = *self.state.next_market_id.get();
                 self.state.next_market_id.set(market_id + 1);
 
-                let half = Amount::from_attos(u128::from(initial_liquidity) / 2);
+                let liq_attos = u128::from(initial_liquidity);
+                if liq_attos == 0 {
+                    return Err("Initial liquidity must be greater than zero".to_string());
+                }
+                let half = Amount::from_attos(liq_attos / 2);
 
                 let market = state::Market {
                     id: market_id,
@@ -133,12 +151,11 @@ impl Contract for MarketContract {
                 };
 
                 self.state.markets.insert(&market_id, market)
-                    .expect("Failed to insert market");
+                    .map_err(|e| format!("Failed to insert market: {}", e))?;
 
-                // Create feed item for market creation
-                self.create_feed_item(caller, FeedItemType::MarketCreated, Some(market_id), question, timestamp).await;
+                self.create_feed_item(caller, FeedItemType::MarketCreated, Some(market_id), question, timestamp).await?;
 
-                OperationResponse::MarketCreated(market_id)
+                Ok(format!("MarketCreated:{}", market_id))
             }
 
             Operation::BuyShares {
@@ -149,11 +166,18 @@ impl Contract for MarketContract {
             } => {
                 let mut market = self.state.markets.get(&market_id)
                     .await
-                    .expect("Failed to get market")
-                    .expect("Market not found");
+                    .map_err(|e| format!("Failed to read market {}: {}", market_id, e))?
+                    .ok_or_else(|| format!("Market {} not found", market_id))?;
 
-                assert!(!market.resolved, "Market is resolved");
-                assert!(timestamp <= market.end_time, "Market has ended");
+                if market.resolved {
+                    return Err(format!("Market {} is already resolved", market_id));
+                }
+                if timestamp > market.end_time {
+                    return Err(format!(
+                        "Market {} has ended (now={}, end={})",
+                        market_id, timestamp.micros(), market.end_time.micros()
+                    ));
+                }
 
                 let (pool_in, pool_out) = if is_yes {
                     (market.no_pool, market.yes_pool)
@@ -165,14 +189,28 @@ impl Contract for MarketContract {
                 let po = u128::from(pool_out);
                 let s = u128::from(shares);
 
-                assert!(s < po, "Not enough liquidity");
+                if s == 0 {
+                    return Err("Shares amount must be greater than zero".to_string());
+                }
+                if s >= po {
+                    return Err(format!(
+                        "Not enough liquidity: requested {} shares but pool only has {} (pool_in={}, pool_out={})",
+                        shares, pool_out, pool_in, pool_out
+                    ));
+                }
+
                 let denominator = po - s;
 
                 // cost = pool_in * shares / (pool_out - shares)
-                // Uses safe_mul_div to avoid u128 overflow
-                let cost = Amount::from_attos(safe_mul_div(pi, s, denominator));
+                let cost_attos = safe_mul_div(pi, s, denominator)?;
+                let cost = Amount::from_attos(cost_attos);
 
-                assert!(cost <= max_cost, "Cost exceeds maximum");
+                if cost > max_cost {
+                    return Err(format!(
+                        "Cost {} exceeds max_cost {} (pool_in={}, pool_out={}, shares={})",
+                        cost, max_cost, pool_in, pool_out, shares
+                    ));
+                }
 
                 if is_yes {
                     market.no_pool = market.no_pool.saturating_add(cost);
@@ -185,18 +223,18 @@ impl Contract for MarketContract {
                 }
 
                 market.volume = market.volume.saturating_add(cost);
-                self.state.markets.insert(&market_id, market.clone()).expect("Failed to update market");
+                self.state.markets.insert(&market_id, market.clone())
+                    .map_err(|e| format!("Failed to update market: {}", e))?;
 
                 let total = *self.state.total_volume.get();
                 self.state.total_volume.set(total.saturating_add(cost));
 
-                self.update_position(caller, market_id, is_yes, shares, true).await;
+                self.update_position(caller, market_id, is_yes, shares, true).await?;
 
-                // Create feed item for trade
                 let content = format!("Bought {} {} shares", shares, if is_yes { "YES" } else { "NO" });
-                self.create_feed_item(caller, FeedItemType::Trade, Some(market_id), content, timestamp).await;
+                self.create_feed_item(caller, FeedItemType::Trade, Some(market_id), content, timestamp).await?;
 
-                OperationResponse::SharesPurchased { cost }
+                Ok(format!("SharesPurchased:{}", cost))
             }
 
             Operation::SellShares {
@@ -207,12 +245,13 @@ impl Contract for MarketContract {
             } => {
                 let mut market = self.state.markets.get(&market_id)
                     .await
-                    .expect("Failed to get market")
-                    .expect("Market not found");
+                    .map_err(|e| format!("Failed to read market {}: {}", market_id, e))?
+                    .ok_or_else(|| format!("Market {} not found", market_id))?;
 
-                assert!(!market.resolved, "Market is resolved");
+                if market.resolved {
+                    return Err(format!("Market {} is already resolved", market_id));
+                }
 
-                // Calculate proceeds using AMM
                 let (pool_in, pool_out) = if is_yes {
                     (market.yes_pool, market.no_pool)
                 } else {
@@ -222,13 +261,21 @@ impl Contract for MarketContract {
                 let po = u128::from(pool_out);
                 let pi = u128::from(pool_in);
                 let s = u128::from(shares);
+
+                if s == 0 {
+                    return Err("Shares amount must be greater than zero".to_string());
+                }
+
                 let new_pool_in = pi + s;
+                let proceeds_attos = safe_mul_div(po, s, new_pool_in)?;
+                let proceeds = Amount::from_attos(proceeds_attos);
 
-                // proceeds = pool_out * shares / (pool_in + shares)
-                // Uses safe_mul_div to avoid u128 overflow
-                let proceeds = Amount::from_attos(safe_mul_div(po, s, new_pool_in));
-
-                assert!(proceeds >= min_proceeds, "Proceeds below minimum");
+                if proceeds < min_proceeds {
+                    return Err(format!(
+                        "Proceeds {} below minimum {} (pool_in={}, pool_out={}, shares={})",
+                        proceeds, min_proceeds, pool_in, pool_out, shares
+                    ));
+                }
 
                 if is_yes {
                     market.yes_pool = market.yes_pool.saturating_add(shares);
@@ -241,57 +288,67 @@ impl Contract for MarketContract {
                 }
 
                 market.volume = market.volume.saturating_add(proceeds);
-                self.state.markets.insert(&market_id, market).expect("Failed to update market");
+                self.state.markets.insert(&market_id, market)
+                    .map_err(|e| format!("Failed to update market: {}", e))?;
 
-                self.update_position(caller, market_id, is_yes, shares, false).await;
+                self.update_position(caller, market_id, is_yes, shares, false).await?;
 
-                OperationResponse::SharesSold { proceeds }
+                Ok(format!("SharesSold:{}", proceeds))
             }
 
             Operation::ResolveMarket { market_id, outcome } => {
                 let mut market = self.state.markets.get(&market_id)
                     .await
-                    .expect("Failed to get market")
-                    .expect("Market not found");
+                    .map_err(|e| format!("Failed to read market {}: {}", market_id, e))?
+                    .ok_or_else(|| format!("Market {} not found", market_id))?;
 
-                assert!(!market.resolved, "Market already resolved");
-                assert!(market.creator == caller, "Not authorized");
+                if market.resolved {
+                    return Err(format!("Market {} is already resolved", market_id));
+                }
+                if market.creator != caller {
+                    return Err("Not authorized: only the creator can resolve this market".to_string());
+                }
 
                 market.resolved = true;
                 market.outcome = Some(outcome);
 
                 self.state.markets.insert(&market_id, market)
-                    .expect("Failed to update market");
+                    .map_err(|e| format!("Failed to update market: {}", e))?;
 
-                // Update any combos that include this market
-                self.update_combos_for_market(market_id, outcome).await;
+                self.update_combos_for_market(market_id, outcome).await?;
 
-                OperationResponse::MarketResolved
+                Ok("MarketResolved".to_string())
             }
 
             Operation::ClaimWinnings { market_id } => {
                 let market = self.state.markets.get(&market_id)
                     .await
-                    .expect("Failed to get market")
-                    .expect("Market not found");
+                    .map_err(|e| format!("Failed to read market {}: {}", market_id, e))?
+                    .ok_or_else(|| format!("Market {} not found", market_id))?;
 
-                assert!(market.resolved, "Market not resolved");
+                if !market.resolved {
+                    return Err(format!("Market {} is not yet resolved", market_id));
+                }
 
                 let position_key = (caller, market_id);
                 let mut position = self.state.positions.get(&position_key)
                     .await
-                    .expect("Failed to get position")
-                    .expect("No position found");
+                    .map_err(|e| format!("Failed to get position: {}", e))?
+                    .ok_or_else(|| "No position found for this market".to_string())?;
 
-                assert!(!position.claimed, "Already claimed");
+                if position.claimed {
+                    return Err("Winnings already claimed".to_string());
+                }
 
                 let winning_shares = match market.outcome {
                     Some(true) => position.yes_shares,
                     Some(false) => position.no_shares,
-                    None => panic!("Market outcome not set"),
+                    None => return Err("Market outcome not set".to_string()),
                 };
 
-                assert!(winning_shares > Amount::ZERO, "No winning shares");
+                if winning_shares == Amount::ZERO {
+                    return Err("No winning shares".to_string());
+                }
 
                 let total_winning_shares = if market.outcome == Some(true) {
                     market.total_yes_shares
@@ -301,14 +358,14 @@ impl Contract for MarketContract {
 
                 let total_pool = market.yes_pool.saturating_add(market.no_pool);
                 let payout = Amount::from_attos(
-                    safe_mul_div(u128::from(winning_shares), u128::from(total_pool), u128::from(total_winning_shares))
+                    safe_mul_div(u128::from(winning_shares), u128::from(total_pool), u128::from(total_winning_shares))?
                 );
 
                 position.claimed = true;
                 self.state.positions.insert(&position_key, position)
-                    .expect("Failed to update position");
+                    .map_err(|e| format!("Failed to update position: {}", e))?;
 
-                OperationResponse::WinningsClaimed(payout)
+                Ok(format!("WinningsClaimed:{}", payout))
             }
 
             // === LIMIT ORDER OPERATIONS ===
@@ -322,10 +379,12 @@ impl Contract for MarketContract {
             } => {
                 let market = self.state.markets.get(&market_id)
                     .await
-                    .expect("Failed to get market")
-                    .expect("Market not found");
+                    .map_err(|e| format!("Failed to read market: {}", e))?
+                    .ok_or_else(|| format!("Market {} not found", market_id))?;
 
-                assert!(!market.resolved, "Market is resolved");
+                if market.resolved {
+                    return Err(format!("Market {} is already resolved", market_id));
+                }
 
                 let order_id = *self.state.next_order_id.get();
                 self.state.next_order_id.set(order_id + 1);
@@ -345,58 +404,73 @@ impl Contract for MarketContract {
                 };
 
                 self.state.limit_orders.insert(&order_id, order)
-                    .expect("Failed to insert order");
+                    .map_err(|e| format!("Failed to insert order: {}", e))?;
 
-                OperationResponse::LimitOrderPlaced(order_id)
+                Ok(format!("LimitOrderPlaced:{}", order_id))
             }
 
             Operation::CancelLimitOrder { order_id } => {
                 let mut order = self.state.limit_orders.get(&order_id)
                     .await
-                    .expect("Failed to get order")
-                    .expect("Order not found");
+                    .map_err(|e| format!("Failed to read order: {}", e))?
+                    .ok_or_else(|| format!("Order {} not found", order_id))?;
 
-                assert!(order.owner == caller, "Not authorized");
-                assert!(order.status == OrderStatus::Open || order.status == OrderStatus::PartiallyFilled, "Order not cancellable");
+                if order.owner != caller {
+                    return Err("Not authorized: not the order owner".to_string());
+                }
+                if order.status != OrderStatus::Open && order.status != OrderStatus::PartiallyFilled {
+                    return Err(format!("Order {} is not cancellable (status: {:?})", order_id, order.status));
+                }
 
                 order.status = OrderStatus::Cancelled;
                 self.state.limit_orders.insert(&order_id, order)
-                    .expect("Failed to update order");
+                    .map_err(|e| format!("Failed to update order: {}", e))?;
 
-                OperationResponse::LimitOrderCancelled
+                Ok("LimitOrderCancelled".to_string())
             }
 
             // === COMBO OPERATIONS ===
             Operation::CreateCombo { name, legs, stake } => {
-                assert!(legs.len() >= 2, "Combo must have at least 2 legs");
-                assert!(legs.len() <= 10, "Combo cannot have more than 10 legs");
+                if legs.len() < 2 {
+                    return Err("Combo must have at least 2 legs".to_string());
+                }
+                if legs.len() > 10 {
+                    return Err("Combo cannot have more than 10 legs".to_string());
+                }
 
                 let combo_id = *self.state.next_combo_id.get();
                 self.state.next_combo_id.set(combo_id + 1);
 
                 let mut combo_legs = Vec::new();
-                let mut combined_odds: u128 = 1_000_000_000_000_000_000; // 1e18 for precision
+                let mut combined_odds: u128 = 1_000_000_000_000_000_000;
 
                 for leg in legs {
                     let market = self.state.markets.get(&leg.market_id)
                         .await
-                        .expect("Failed to get market")
-                        .expect("Market not found");
+                        .map_err(|e| format!("Failed to read market {}: {}", leg.market_id, e))?
+                        .ok_or_else(|| format!("Market {} not found", leg.market_id))?;
 
-                    assert!(!market.resolved, "Market already resolved");
+                    if market.resolved {
+                        return Err(format!("Market {} in combo is already resolved", leg.market_id));
+                    }
 
-                    // Calculate odds for this leg
                     let yes_pool: u128 = u128::from(market.yes_pool);
                     let no_pool: u128 = u128::from(market.no_pool);
                     let total = yes_pool + no_pool;
-                    
+
+                    if total == 0 {
+                        return Err(format!("Market {} has zero liquidity", leg.market_id));
+                    }
+
                     let odds = if leg.prediction {
                         (no_pool * 1_000_000_000_000_000_000) / total
                     } else {
                         (yes_pool * 1_000_000_000_000_000_000) / total
                     };
 
-                    combined_odds = (combined_odds * 1_000_000_000_000_000_000) / odds;
+                    if odds > 0 {
+                        combined_odds = (combined_odds * 1_000_000_000_000_000_000) / odds;
+                    }
 
                     combo_legs.push(ComboLegState {
                         market_id: leg.market_id,
@@ -423,28 +497,32 @@ impl Contract for MarketContract {
                 };
 
                 self.state.combos.insert(&combo_id, combo)
-                    .expect("Failed to insert combo");
+                    .map_err(|e| format!("Failed to insert combo: {}", e))?;
 
-                OperationResponse::ComboCreated(combo_id)
+                Ok(format!("ComboCreated:{}", combo_id))
             }
 
             Operation::CancelCombo { combo_id } => {
                 let mut combo = self.state.combos.get(&combo_id)
                     .await
-                    .expect("Failed to get combo")
-                    .expect("Combo not found");
+                    .map_err(|e| format!("Failed to read combo: {}", e))?
+                    .ok_or_else(|| format!("Combo {} not found", combo_id))?;
 
-                assert!(combo.owner == caller, "Not authorized");
-                assert!(combo.status == ComboStatus::Active, "Combo not active");
-
-                // Check no legs are resolved yet
-                assert!(combo.legs.iter().all(|l| !l.resolved), "Cannot cancel - some markets resolved");
+                if combo.owner != caller {
+                    return Err("Not authorized: not the combo owner".to_string());
+                }
+                if combo.status != ComboStatus::Active {
+                    return Err(format!("Combo {} is not active (status: {:?})", combo_id, combo.status));
+                }
+                if !combo.legs.iter().all(|l| !l.resolved) {
+                    return Err("Cannot cancel combo — some markets are already resolved".to_string());
+                }
 
                 combo.status = ComboStatus::Cancelled;
                 self.state.combos.insert(&combo_id, combo)
-                    .expect("Failed to update combo");
+                    .map_err(|e| format!("Failed to update combo: {}", e))?;
 
-                OperationResponse::ComboCancelled
+                Ok("ComboCancelled".to_string())
             }
 
             // === AGENT OPERATIONS ===
@@ -475,46 +553,50 @@ impl Contract for MarketContract {
                 };
 
                 self.state.agents.insert(&agent_id, agent)
-                    .expect("Failed to insert agent");
+                    .map_err(|e| format!("Failed to insert agent: {}", e))?;
 
-                OperationResponse::AgentCreated(agent_id)
+                Ok(format!("AgentCreated:{}", agent_id))
             }
 
             Operation::UpdateAgentConfig { agent_id, config } => {
                 let mut agent = self.state.agents.get(&agent_id)
                     .await
-                    .expect("Failed to get agent")
-                    .expect("Agent not found");
+                    .map_err(|e| format!("Failed to read agent: {}", e))?
+                    .ok_or_else(|| format!("Agent {} not found", agent_id))?;
 
-                assert!(agent.owner == caller, "Not authorized");
+                if agent.owner != caller {
+                    return Err("Not authorized: not the agent owner".to_string());
+                }
 
                 agent.config = config;
                 self.state.agents.insert(&agent_id, agent)
-                    .expect("Failed to update agent");
+                    .map_err(|e| format!("Failed to update agent: {}", e))?;
 
-                OperationResponse::AgentUpdated
+                Ok("AgentUpdated".to_string())
             }
 
             Operation::ToggleAgent { agent_id, active } => {
                 let mut agent = self.state.agents.get(&agent_id)
                     .await
-                    .expect("Failed to get agent")
-                    .expect("Agent not found");
+                    .map_err(|e| format!("Failed to read agent: {}", e))?
+                    .ok_or_else(|| format!("Agent {} not found", agent_id))?;
 
-                assert!(agent.owner == caller, "Not authorized");
+                if agent.owner != caller {
+                    return Err("Not authorized: not the agent owner".to_string());
+                }
 
                 agent.is_active = active;
                 self.state.agents.insert(&agent_id, agent)
-                    .expect("Failed to update agent");
+                    .map_err(|e| format!("Failed to update agent: {}", e))?;
 
-                OperationResponse::AgentToggled
+                Ok("AgentToggled".to_string())
             }
 
             Operation::FollowAgent { agent_id, allocation } => {
                 let mut agent = self.state.agents.get(&agent_id)
                     .await
-                    .expect("Failed to get agent")
-                    .expect("Agent not found");
+                    .map_err(|e| format!("Failed to read agent: {}", e))?
+                    .ok_or_else(|| format!("Agent {} not found", agent_id))?;
 
                 let follower = state::AgentFollower {
                     agent_id,
@@ -527,123 +609,120 @@ impl Contract for MarketContract {
 
                 let key = (agent_id, caller);
                 self.state.agent_followers.insert(&key, follower)
-                    .expect("Failed to insert follower");
+                    .map_err(|e| format!("Failed to insert follower: {}", e))?;
 
                 agent.followers_count += 1;
                 self.state.agents.insert(&agent_id, agent)
-                    .expect("Failed to update agent");
+                    .map_err(|e| format!("Failed to update agent: {}", e))?;
 
-                OperationResponse::AgentFollowed
+                Ok("AgentFollowed".to_string())
             }
 
             Operation::UnfollowAgent { agent_id } => {
                 let mut agent = self.state.agents.get(&agent_id)
                     .await
-                    .expect("Failed to get agent")
-                    .expect("Agent not found");
+                    .map_err(|e| format!("Failed to read agent: {}", e))?
+                    .ok_or_else(|| format!("Agent {} not found", agent_id))?;
 
                 let key = (agent_id, caller);
                 self.state.agent_followers.remove(&key)
-                    .expect("Failed to remove follower");
+                    .map_err(|e| format!("Failed to remove follower: {}", e))?;
 
                 agent.followers_count = agent.followers_count.saturating_sub(1);
                 self.state.agents.insert(&agent_id, agent)
-                    .expect("Failed to update agent");
+                    .map_err(|e| format!("Failed to update agent: {}", e))?;
 
-                OperationResponse::AgentUnfollowed
+                Ok("AgentUnfollowed".to_string())
             }
 
             // === SOCIAL OPERATIONS ===
             Operation::PostComment { market_id, content } => {
-                let feed_id = self.create_feed_item(caller, FeedItemType::Comment, Some(market_id), content, timestamp).await;
-                OperationResponse::CommentPosted(feed_id)
+                let feed_id = self.create_feed_item(caller, FeedItemType::Comment, Some(market_id), content, timestamp).await?;
+                Ok(format!("CommentPosted:{}", feed_id))
             }
 
             Operation::FollowUser { user } => {
                 let mut following = self.state.user_following.get(&caller)
                     .await
-                    .expect("Failed to get following")
+                    .map_err(|e| format!("Failed to get following: {}", e))?
                     .unwrap_or_default();
 
                 if !following.contains(&user) {
                     following.push(user);
                     self.state.user_following.insert(&caller, following)
-                        .expect("Failed to update following");
+                        .map_err(|e| format!("Failed to update following: {}", e))?;
 
                     let mut followers = self.state.user_followers.get(&user)
                         .await
-                        .expect("Failed to get followers")
+                        .map_err(|e| format!("Failed to get followers: {}", e))?
                         .unwrap_or_default();
                     followers.push(caller);
                     self.state.user_followers.insert(&user, followers)
-                        .expect("Failed to update followers");
+                        .map_err(|e| format!("Failed to update followers: {}", e))?;
                 }
 
-                OperationResponse::UserFollowed
+                Ok("UserFollowed".to_string())
             }
 
             Operation::UnfollowUser { user } => {
                 let mut following = self.state.user_following.get(&caller)
                     .await
-                    .expect("Failed to get following")
+                    .map_err(|e| format!("Failed to get following: {}", e))?
                     .unwrap_or_default();
 
                 following.retain(|u| u != &user);
                 self.state.user_following.insert(&caller, following)
-                    .expect("Failed to update following");
+                    .map_err(|e| format!("Failed to update following: {}", e))?;
 
                 let mut followers = self.state.user_followers.get(&user)
                     .await
-                    .expect("Failed to get followers")
+                    .map_err(|e| format!("Failed to get followers: {}", e))?
                     .unwrap_or_default();
                 followers.retain(|u| u != &caller);
                 self.state.user_followers.insert(&user, followers)
-                    .expect("Failed to update followers");
+                    .map_err(|e| format!("Failed to update followers: {}", e))?;
 
-                OperationResponse::UserUnfollowed
+                Ok("UserUnfollowed".to_string())
             }
 
             Operation::LikeFeedItem { item_id } => {
                 let mut item = self.state.feed_items.get(&item_id)
                     .await
-                    .expect("Failed to get item")
-                    .expect("Item not found");
+                    .map_err(|e| format!("Failed to get feed item: {}", e))?
+                    .ok_or_else(|| format!("Feed item {} not found", item_id))?;
 
                 let mut likes = self.state.item_likes.get(&item_id)
                     .await
-                    .expect("Failed to get likes")
+                    .map_err(|e| format!("Failed to get likes: {}", e))?
                     .unwrap_or_default();
 
                 if !likes.contains(&caller) {
                     likes.push(caller);
                     item.likes_count += 1;
-                    
+
                     self.state.item_likes.insert(&item_id, likes)
-                        .expect("Failed to update likes");
+                        .map_err(|e| format!("Failed to update likes: {}", e))?;
                     self.state.feed_items.insert(&item_id, item)
-                        .expect("Failed to update item");
+                        .map_err(|e| format!("Failed to update item: {}", e))?;
                 }
 
-                OperationResponse::ItemLiked
+                Ok("ItemLiked".to_string())
             }
         }
     }
 
-    async fn execute_message(&mut self, _message: ()) {
-        panic!("Messages not supported");
-    }
-
-    async fn store(mut self) {
-        self.state.save().await.expect("Failed to save state");
-    }
-}
-
-impl MarketContract {
-    async fn update_position(&mut self, owner: AccountOwner, market_id: u64, is_yes: bool, shares: Amount, is_buy: bool) {
+    async fn update_position(
+        &mut self,
+        owner: AccountOwner,
+        market_id: u64,
+        is_yes: bool,
+        shares: Amount,
+        is_buy: bool,
+    ) -> Result<(), String> {
         let position_key = (owner, market_id);
         let mut position = self.state.positions.get(&position_key)
             .await
-            .expect("Failed to get position")
+            .map_err(|e| format!("Failed to get position: {}", e))?
             .unwrap_or(state::Position {
                 market_id,
                 owner,
@@ -667,7 +746,9 @@ impl MarketContract {
         }
 
         self.state.positions.insert(&position_key, position)
-            .expect("Failed to update position");
+            .map_err(|e| format!("Failed to update position: {}", e))?;
+
+        Ok(())
     }
 
     async fn create_feed_item(
@@ -677,7 +758,7 @@ impl MarketContract {
         market_id: Option<u64>,
         content: String,
         timestamp: linera_sdk::linera_base_types::Timestamp,
-    ) -> u64 {
+    ) -> Result<u64, String> {
         let feed_id = *self.state.next_feed_id.get();
         self.state.next_feed_id.set(feed_id + 1);
 
@@ -694,14 +775,14 @@ impl MarketContract {
         };
 
         self.state.feed_items.insert(&feed_id, item)
-            .expect("Failed to insert feed item");
+            .map_err(|e| format!("Failed to insert feed item: {}", e))?;
 
-        feed_id
+        Ok(feed_id)
     }
 
-    async fn update_combos_for_market(&mut self, market_id: u64, outcome: bool) {
+    async fn update_combos_for_market(&mut self, market_id: u64, outcome: bool) -> Result<(), String> {
         let next_combo_id = *self.state.next_combo_id.get();
-        
+
         for combo_id in 0..next_combo_id {
             if let Ok(Some(mut combo)) = self.state.combos.get(&combo_id).await {
                 if combo.status != ComboStatus::Active && combo.status != ComboStatus::PartiallyResolved {
@@ -736,9 +817,11 @@ impl MarketContract {
                     }
 
                     self.state.combos.insert(&combo_id, combo)
-                        .expect("Failed to update combo");
+                        .map_err(|e| format!("Failed to update combo: {}", e))?;
                 }
             }
         }
+
+        Ok(())
     }
 }
